@@ -2,6 +2,7 @@ package net.jgpower.gichan_land.ui.walkietalkie
 
 import android.Manifest
 import android.content.pm.PackageManager
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.border
@@ -21,20 +22,20 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -67,6 +68,16 @@ fun WalkieTalkieScreen(
     var selectedTarget by remember { mutableStateOf<WalkieTarget?>(null) }
     var isMicOn by remember { mutableStateOf(false) }
 
+    fun exitScreen() {
+        WalkieTalkieManager.stopTransmit()
+        isMicOn = false
+        onBackClick()
+    }
+
+    BackHandler {
+        exitScreen()
+    }
+
     val micPermissionLauncher =
         rememberLauncherForActivityResult(
             ActivityResultContracts.RequestPermission()
@@ -74,6 +85,7 @@ fun WalkieTalkieScreen(
             if (granted) {
                 val started = WalkieTalkieManager.startTransmit(context)
                 isMicOn = started
+
                 if (!started) {
                     errorMessage = "무전 송신을 시작할 수 없습니다."
                 }
@@ -148,7 +160,9 @@ fun WalkieTalkieScreen(
                 },
                 navigationIcon = {
                     OutlinedButton(
-                        onClick = onBackClick,
+                        onClick = {
+                            exitScreen()
+                        },
                         modifier = Modifier.padding(start = 8.dp)
                     ) {
                         Text("뒤로")
@@ -318,6 +332,8 @@ fun WalkieTalkieScreen(
                 },
                 modifier = Modifier.fillMaxWidth()
             )
+
+
         }
     }
 }

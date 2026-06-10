@@ -143,19 +143,6 @@ fun MainScreen(
                         knownEventIds.clear()
                         knownEventIds.addAll(latestList.map { it.eventId })
                         isFirstLoad.value = false
-                    } else {
-                        val newOrUpdatedAlerts = latestList.filter { latestAlert ->
-                            val oldAlert = alerts.find { it.eventId == latestAlert.eventId }
-
-                            oldAlert == null || isNewerAlert(latestAlert, oldAlert)
-                        }
-
-                        newOrUpdatedAlerts.forEach { alert ->
-                            AppNotificationManager.showAlertNotification(
-                                context = context,
-                                alert = alert
-                            )
-                        }
                     }
 
                     alerts.clear()

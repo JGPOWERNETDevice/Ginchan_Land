@@ -32,6 +32,7 @@ import net.jgpower.gichan_land.ui.signin.SignInScreen
 import net.jgpower.gichan_land.ui.walkietalkie.WalkieTalkieScreen
 import kotlinx.coroutines.delay
 import net.jgpower.gichan_land.network.WalkieTalkieManager
+
 object Routes {
     const val SIGN_IN = "sign_in"
     const val MAIN = "main"
@@ -85,10 +86,13 @@ fun AppNavigation(
     }
 
     fun startWalkieReceiver(workerId: String) {
-        if (workerId.isBlank()) return
+        if (workerId.isBlank()) {
+            Log.d("WALKIE_NAV", "startWalkieReceiver skipped. workerId blank")
+            return
+        }
 
         coroutineScope.launch {
-            repeat(5) {
+            repeat(10) { index ->
                 try {
                     val workers = ApiServiceManager.apiService.getOnlineWorkers()
                     val me = workers.firstOrNull { it.workerId == workerId }
@@ -101,15 +105,26 @@ fun AppNavigation(
                             areaGroup = areaGroup
                         )
 
-                        Log.d("WALKIE_NAV", "walkie receiver started workerId=$workerId areaGroup=$areaGroup")
+                        Log.d(
+                            "WALKIE_NAV",
+                            "walkie receiver started workerId=$workerId areaGroup=$areaGroup"
+                        )
+
                         return@launch
                     }
+
+                    Log.d(
+                        "WALKIE_NAV",
+                        "worker not found in online list yet. retry=$index workerId=$workerId"
+                    )
                 } catch (e: Exception) {
-                    Log.e("WALKIE_NAV", "startWalkieReceiver failed", e)
+                    Log.e("WALKIE_NAV", "startWalkieReceiver failed retry=$index", e)
                 }
 
                 delay(1000L)
             }
+
+            Log.d("WALKIE_NAV", "startWalkieReceiver failed after retries workerId=$workerId")
         }
     }
 
@@ -166,6 +181,7 @@ fun AppNavigation(
             loginWorkerId.value = savedWorkerId
             currentRoute.value = Routes.MAIN
             startWebSocketService(savedWorkerId)
+            startWalkieReceiver(savedWorkerId)
         }
 
         isCheckingLogin.value = false
@@ -181,6 +197,7 @@ fun AppNavigation(
                 loginWorkerId.value = startWorkerId
                 loginDataStore.saveLogin(startWorkerId)
                 startWebSocketService(startWorkerId)
+                startWalkieReceiver(startWorkerId)
             }
 
             currentRoute.value = Routes.ALERT_DETAIL
@@ -206,6 +223,7 @@ fun AppNavigation(
                         currentRoute.value = Routes.MAIN
 
                         startWebSocketService(workerId)
+                        startWalkieReceiver(workerId)
                     }
                 }
             )
@@ -240,6 +258,7 @@ fun AppNavigation(
                         try {
                             stopWebSocketService()
                             AppWebSocketManager.disconnect()
+                            WalkieTalkieManager.stop()
 
                             if (workerId.isNotBlank()) {
                                 authRepository.logout(workerId)

@@ -61,6 +61,8 @@ dependencies {
     implementation("androidx.datastore:datastore-preferences:1.1.1")
     testImplementation(libs.junit)
 
+    implementation("io.github.jaredmdobson:concentus:1.0.2")
+
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
     androidTestImplementation(platform(libs.androidx.compose.bom))
