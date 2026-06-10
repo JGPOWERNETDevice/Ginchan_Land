@@ -1,0 +1,15 @@
+package net.jgpower.gichan_land.network
+
+import retrofit2.Retrofit
+import retrofit2.converter.gson.GsonConverterFactory
+
+object ApiServiceManager {
+
+    val apiService: ApiService by lazy {
+        Retrofit.Builder()
+            .baseUrl(NetworkConstants.BASE_URL)
+            .addConverterFactory(GsonConverterFactory.create())
+            .build()
+            .create(ApiService::class.java)
+    }
+}
