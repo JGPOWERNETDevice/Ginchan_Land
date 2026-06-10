@@ -22,6 +22,7 @@ import net.jgpower.gichan_land.data.emergency.PresenceStatusResponse
 import net.jgpower.gichan_land.data.event.EventTypeItem
 import net.jgpower.gichan_land.data.textalert.TextAlertListResponse
 import net.jgpower.gichan_land.data.area.AreaTypeItem
+import net.jgpower.gichan_land.data.walkie.OnlineWorkerDto
 
 
 
@@ -90,5 +91,8 @@ interface ApiService {
 
     @GET("api/area-types")
     suspend fun getAreaTypes(): List<AreaTypeItem>
+
+    @GET("api/monitor/online-workers")
+    suspend fun getOnlineWorkers(): List<OnlineWorkerDto>
 
 }

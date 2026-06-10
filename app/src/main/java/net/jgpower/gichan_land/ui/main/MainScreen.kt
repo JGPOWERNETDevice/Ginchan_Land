@@ -52,6 +52,7 @@ fun MainScreen(
     onActionReportClick: (String) -> Unit,
     onCreateEventClick: () -> Unit,
     onNoticeClick: () -> Unit,
+    onWalkieTalkieClick: () -> Unit,
     onLogoutClick: () -> Unit
 ) {
     BackHandler {
@@ -274,6 +275,15 @@ fun MainScreen(
             modifier = Modifier.fillMaxWidth()
         ) {
             Text("공지사항")
+        }
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        Button(
+            onClick = onWalkieTalkieClick,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text("무전기")
         }
 
         Spacer(modifier = Modifier.height(12.dp))

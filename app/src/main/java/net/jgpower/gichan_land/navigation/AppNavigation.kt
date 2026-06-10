@@ -29,6 +29,18 @@ import net.jgpower.gichan_land.ui.event_create.EventCreateScreen
 import net.jgpower.gichan_land.ui.main.MainScreen
 import net.jgpower.gichan_land.ui.notice.NoticeScreen
 import net.jgpower.gichan_land.ui.signin.SignInScreen
+import net.jgpower.gichan_land.ui.walkietalkie.WalkieTalkieScreen
+import kotlinx.coroutines.delay
+import net.jgpower.gichan_land.network.WalkieTalkieManager
+object Routes {
+    const val SIGN_IN = "sign_in"
+    const val MAIN = "main"
+    const val ALERT_DETAIL = "alert_detail"
+    const val ACTION_REPORT = "action_report"
+    const val EVENT_CREATE = "event_create"
+    const val NOTICE = "notice"
+    const val WALKIE_TALKIE = "walkie_talkie"
+}
 
 @Composable
 fun AppNavigation(
@@ -69,6 +81,35 @@ fun AppNavigation(
             Log.d("WS_NAV", "startForegroundService called")
         } catch (e: Exception) {
             Log.e("WS_NAV", "startForegroundService failed", e)
+        }
+    }
+
+    fun startWalkieReceiver(workerId: String) {
+        if (workerId.isBlank()) return
+
+        coroutineScope.launch {
+            repeat(5) {
+                try {
+                    val workers = ApiServiceManager.apiService.getOnlineWorkers()
+                    val me = workers.firstOrNull { it.workerId == workerId }
+                    val areaGroup = me?.areaGroup
+
+                    if (!areaGroup.isNullOrBlank()) {
+                        WalkieTalkieManager.start(
+                            context = appContext,
+                            workerId = workerId,
+                            areaGroup = areaGroup
+                        )
+
+                        Log.d("WALKIE_NAV", "walkie receiver started workerId=$workerId areaGroup=$areaGroup")
+                        return@launch
+                    }
+                } catch (e: Exception) {
+                    Log.e("WALKIE_NAV", "startWalkieReceiver failed", e)
+                }
+
+                delay(1000L)
+            }
         }
     }
 
@@ -187,6 +228,9 @@ fun AppNavigation(
                 onNoticeClick = {
                     currentRoute.value = Routes.NOTICE
                 },
+                onWalkieTalkieClick = {
+                    currentRoute.value = Routes.WALKIE_TALKIE
+                },
                 onLogoutClick = {
                     val workerId = loginWorkerId.value
 
@@ -253,6 +297,15 @@ fun AppNavigation(
 
         Routes.NOTICE -> {
             NoticeScreen(
+                workerId = loginWorkerId.value,
+                onBackClick = {
+                    currentRoute.value = Routes.MAIN
+                }
+            )
+        }
+
+        Routes.WALKIE_TALKIE -> {
+            WalkieTalkieScreen(
                 workerId = loginWorkerId.value,
                 onBackClick = {
                     currentRoute.value = Routes.MAIN
