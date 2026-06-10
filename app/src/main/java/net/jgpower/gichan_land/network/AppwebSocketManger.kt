@@ -68,11 +68,13 @@ object AppWebSocketManager {
         currentWorkerId = workerId
         isConnecting = true
 
+        val wsUrl = ServerConfig.getWebSocketUrl(context)
+
         val request = Request.Builder()
-            .url("ws://192.168.100.32:1880/ws/app")
+            .url(wsUrl)
             .build()
 
-        Log.d("WS_MANAGER", "newWebSocket start")
+        Log.d("WS_MANAGER", "newWebSocket start url=$wsUrl")
 
         webSocket = client.newWebSocket(
             request,
@@ -203,6 +205,43 @@ object AppWebSocketManager {
                     reconnectLater()
                 }
             }
+        )
+    }
+
+    fun reconnectCurrent() {
+        val workerId = currentWorkerId
+        val context = appContext
+
+        Log.d(
+            "WS_MANAGER",
+            "reconnectCurrent called workerId=$workerId context=$context"
+        )
+
+        if (workerId.isNullOrBlank() || context == null) {
+            return
+        }
+
+        stopPing()
+        isConnecting = false
+
+        val oldSocket = webSocket
+        webSocket = null
+
+        oldSocket?.close(1000, "network changed")
+
+        mainHandler.postDelayed(
+            {
+                if (
+                    shouldReconnect &&
+                    webSocket == null &&
+                    !isConnecting &&
+                    currentWorkerId == workerId
+                ) {
+                    Log.d("WS_MANAGER", "reconnectCurrent execute")
+                    connect(workerId, context)
+                }
+            },
+            1000L
         )
     }
 

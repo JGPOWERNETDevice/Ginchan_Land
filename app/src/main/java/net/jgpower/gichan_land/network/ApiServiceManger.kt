@@ -1,15 +1,29 @@
 package net.jgpower.gichan_land.network
 
+import android.content.Context
 import retrofit2.Retrofit
 import retrofit2.converter.gson.GsonConverterFactory
 
 object ApiServiceManager {
 
-    val apiService: ApiService by lazy {
-        Retrofit.Builder()
-            .baseUrl(NetworkConstants.BASE_URL)
-            .addConverterFactory(GsonConverterFactory.create())
-            .build()
-            .create(ApiService::class.java)
+    private var currentBaseUrl: String? = null
+    private var retrofit: Retrofit? = null
+
+    lateinit var apiService: ApiService
+        private set
+
+    fun init(context: Context) {
+        val baseUrl = ServerConfig.getBaseHttpUrl(context)
+
+        if (retrofit == null || currentBaseUrl != baseUrl) {
+            currentBaseUrl = baseUrl
+
+            retrofit = Retrofit.Builder()
+                .baseUrl(baseUrl)
+                .addConverterFactory(GsonConverterFactory.create())
+                .build()
+
+            apiService = retrofit!!.create(ApiService::class.java)
+        }
     }
 }
