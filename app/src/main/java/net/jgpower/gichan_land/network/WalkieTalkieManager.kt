@@ -17,11 +17,8 @@ import java.net.DatagramSocket
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.nio.ByteOrder
-import java.util.ArrayDeque
-import java.util.concurrent.ConcurrentHashMap
 import kotlin.concurrent.thread
 import kotlin.math.max
-import kotlin.math.min
 import net.jgpower.gichan_land.data.walkie.WalkieTarget
 import net.jgpower.gichan_land.data.walkie.WalkieTargetType
 
@@ -47,18 +44,13 @@ object WalkieTalkieManager {
     private const val FRAME_BYTES = FRAME_SAMPLES * 2
     private const val OPUS_BITRATE = 16000
 
-    private const val MAX_QUEUE_FRAMES = 2
     private const val MAX_PAYLOAD_BYTES = 1024
-    private const val MIXER_IDLE_SLEEP_MS = 4L
 
     @Volatile
     private var socket: DatagramSocket? = null
 
     @Volatile
     private var isReceiverRunning = false
-
-    @Volatile
-    private var isMixerRunning = false
 
     @Volatile
     private var isTransmitting = false
@@ -78,10 +70,12 @@ object WalkieTalkieManager {
     @Volatile
     private var opusDecoder: OpusCodec? = null
 
-    private var sequence = 0
+    @Volatile
+    private var playbackTrack: AudioTrack? = null
 
-    private val senderQueues =
-        ConcurrentHashMap<String, ArrayDeque<ShortArray>>()
+    private val playbackLock = Any()
+
+    private var sequence = 0
 
     fun start(
         context: Context,
@@ -99,6 +93,8 @@ object WalkieTalkieManager {
             bitrate = OPUS_BITRATE
         )
 
+        initPlaybackTrack()
+
         if (isReceiverRunning && socket != null) {
             Log.d(TAG, "already started. workerId=$workerId areaGroup=$areaGroup")
             return
@@ -113,7 +109,6 @@ object WalkieTalkieManager {
         socket = newSocket
 
         startReceiver(newSocket)
-        startMixer()
 
         Log.d(
             TAG,
@@ -125,7 +120,6 @@ object WalkieTalkieManager {
         stopTransmit()
 
         isReceiverRunning = false
-        isMixerRunning = false
 
         try {
             socket?.close()
@@ -134,7 +128,20 @@ object WalkieTalkieManager {
 
         socket = null
         opusDecoder = null
-        senderQueues.clear()
+
+        synchronized(playbackLock) {
+            try {
+                playbackTrack?.stop()
+            } catch (_: Exception) {
+            }
+
+            try {
+                playbackTrack?.release()
+            } catch (_: Exception) {
+            }
+
+            playbackTrack = null
+        }
 
         Log.d(TAG, "stopped")
     }
@@ -331,16 +338,16 @@ object WalkieTalkieManager {
         }
 
         val headerSize =
-            2 + // magic
-                    1 + // type
-                    1 + // codec
-                    1 + // channel
-                    1 + // target type
-                    2 + // seq
+            2 +
+                    1 +
+                    1 +
+                    1 +
+                    1 +
+                    2 +
                     1 + senderBytes.size +
                     1 + targetWorkerBytes.size +
                     1 + targetGroupBytes.size +
-                    2 // payload length
+                    2
 
         val packet = ByteArray(headerSize + payload.size + 2)
 
@@ -398,12 +405,12 @@ object WalkieTalkieManager {
 
             while (isReceiverRunning) {
                 try {
-                    val packet = DatagramPacket(buffer, buffer.size)
-                    socket.receive(packet)
+                    val datagramPacket = DatagramPacket(buffer, buffer.size)
+                    socket.receive(datagramPacket)
 
                     handleIncomingPacket(
-                        data = packet.data,
-                        size = packet.length
+                        data = datagramPacket.data,
+                        size = datagramPacket.length
                     )
                 } catch (e: Exception) {
                     if (isReceiverRunning) {
@@ -457,22 +464,72 @@ object WalkieTalkieManager {
             val decodedPcm =
                 opusDecoder?.decodeToPcm(packet.payload) ?: return
 
-            val samples = bytesToShorts(decodedPcm)
-            if (samples.isEmpty()) return
+            if (decodedPcm.isEmpty()) return
 
-            val queue = senderQueues.getOrPut(packet.senderWorkerId) {
-                ArrayDeque()
-            }
-
-            synchronized(queue) {
-                while (queue.size >= MAX_QUEUE_FRAMES) {
-                    queue.removeFirst()
-                }
-
-                queue.addLast(samples)
-            }
+            playPcm(decodedPcm)
         } catch (e: Exception) {
             Log.e(TAG, "handle packet failed", e)
+        }
+    }
+
+    private fun initPlaybackTrack() {
+        synchronized(playbackLock) {
+            if (playbackTrack != null) {
+                return
+            }
+
+            try {
+                val minBuffer = AudioTrack.getMinBufferSize(
+                    SAMPLE_RATE,
+                    AudioFormat.CHANNEL_OUT_MONO,
+                    AudioFormat.ENCODING_PCM_16BIT
+                )
+
+                val track = AudioTrack.Builder()
+                    .setAudioAttributes(
+                        AudioAttributes.Builder()
+                            .setUsage(AudioAttributes.USAGE_MEDIA)
+                            .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                            .build()
+                    )
+                    .setAudioFormat(
+                        AudioFormat.Builder()
+                            .setSampleRate(SAMPLE_RATE)
+                            .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
+                            .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                            .build()
+                    )
+                    .setBufferSizeInBytes(max(minBuffer, FRAME_BYTES * 4))
+                    .setTransferMode(AudioTrack.MODE_STREAM)
+                    .build()
+
+                track.setVolume(AudioTrack.getMaxVolume())
+                track.play()
+
+                playbackTrack = track
+
+                Log.d(TAG, "playback track started")
+            } catch (e: Exception) {
+                playbackTrack = null
+                Log.e(TAG, "playback track init failed", e)
+            }
+        }
+    }
+
+    private fun playPcm(pcmBytes: ByteArray) {
+        synchronized(playbackLock) {
+            try {
+                val track = playbackTrack ?: return
+
+                track.write(
+                    pcmBytes,
+                    0,
+                    pcmBytes.size,
+                    AudioTrack.WRITE_BLOCKING
+                )
+            } catch (e: Exception) {
+                Log.e(TAG, "play pcm failed", e)
+            }
         }
     }
 
@@ -553,126 +610,6 @@ object WalkieTalkieManager {
         )
     }
 
-    private fun startMixer() {
-        if (isMixerRunning) return
-
-        isMixerRunning = true
-
-        thread(name = "walkie-mixer") {
-            var audioTrack: AudioTrack? = null
-
-            try {
-                val minBuffer = AudioTrack.getMinBufferSize(
-                    SAMPLE_RATE,
-                    AudioFormat.CHANNEL_OUT_MONO,
-                    AudioFormat.ENCODING_PCM_16BIT
-                )
-
-                audioTrack = AudioTrack.Builder()
-                    .setAudioAttributes(
-                        AudioAttributes.Builder()
-                            .setUsage(AudioAttributes.USAGE_MEDIA)
-                            .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
-                            .build()
-                    )
-                    .setAudioFormat(
-                        AudioFormat.Builder()
-                            .setSampleRate(SAMPLE_RATE)
-                            .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
-                            .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
-                            .build()
-                    )
-                    .setBufferSizeInBytes(max(minBuffer, FRAME_BYTES * 8))
-                    .setTransferMode(AudioTrack.MODE_STREAM)
-                    .build()
-
-                audioTrack.setVolume(AudioTrack.getMaxVolume())
-                audioTrack.play()
-
-                Log.d(TAG, "mixer started")
-
-                while (isMixerRunning) {
-                    val activeFrames = mutableListOf<ShortArray>()
-
-                    senderQueues.forEach { (_, queue) ->
-                        val frame: ShortArray? = synchronized(queue) {
-                            while (queue.size > 1) {
-                                queue.removeFirst()
-                            }
-
-                            if (queue.isEmpty()) null else queue.removeFirst()
-                        }
-
-                        if (frame != null) {
-                            activeFrames.add(frame)
-                        }
-                    }
-
-                    if (activeFrames.isNotEmpty()) {
-                        val mixed = mixFrames(activeFrames)
-
-                        audioTrack.write(
-                            mixed,
-                            0,
-                            mixed.size,
-                            AudioTrack.WRITE_BLOCKING
-                        )
-                    } else {
-                        Thread.sleep(MIXER_IDLE_SLEEP_MS)
-                    }
-                }
-            } catch (e: Exception) {
-                Log.e(TAG, "mixer failed", e)
-            } finally {
-                try {
-                    audioTrack?.stop()
-                } catch (_: Exception) {
-                }
-
-                audioTrack?.release()
-                Log.d(TAG, "mixer stopped")
-            }
-        }
-    }
-
-    private fun mixFrames(
-        frames: List<ShortArray>
-    ): ShortArray {
-        if (frames.size == 1) {
-            return frames[0]
-        }
-
-        val mixed = ShortArray(FRAME_SAMPLES)
-        val divisor = frames.size
-
-        for (frame in frames) {
-            val count = min(FRAME_SAMPLES, frame.size)
-
-            for (i in 0 until count) {
-                val sum = mixed[i].toInt() + frame[i].toInt() / divisor
-                mixed[i] = sum.coerceIn(
-                    Short.MIN_VALUE.toInt(),
-                    Short.MAX_VALUE.toInt()
-                ).toShort()
-            }
-        }
-
-        return mixed
-    }
-
-    private fun bytesToShorts(bytes: ByteArray): ShortArray {
-        val shortCount = bytes.size / 2
-        val result = ShortArray(shortCount)
-
-        for (i in 0 until shortCount) {
-            val low = bytes[i * 2].toInt() and 0xff
-            val high = bytes[i * 2 + 1].toInt()
-            result[i] = ((high shl 8) or low).toShort()
-        }
-
-        return result
-    }
-
     private fun crc16Ccitt(
         data: ByteArray,
         offset: Int,
@@ -728,8 +665,6 @@ object WalkieTalkieManager {
             InetAddress.getByName("255.255.255.255")
         }
     }
-
-
 
     private data class WalkieAudioPacket(
         val codec: Int,
