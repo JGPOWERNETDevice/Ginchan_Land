@@ -19,6 +19,7 @@ import java.net.InetSocketAddress
 import java.nio.ByteOrder
 import java.util.ArrayDeque
 import kotlin.concurrent.thread
+import kotlin.math.abs
 import kotlin.math.max
 import net.jgpower.gichan_land.data.walkie.WalkieTarget
 import net.jgpower.gichan_land.data.walkie.WalkieTargetType
@@ -28,7 +29,7 @@ object WalkieTalkieManager {
     private const val TAG = "WALKIE"
 
     private const val UDP_PORT = 51515
-    private const val CHANNEL_ID = 1
+    private const val CHANNEL_ID = 5
 
     private const val MAGIC_1 = 0xAA.toByte()
     private const val MAGIC_2 = 0x55.toByte()
@@ -50,6 +51,13 @@ object WalkieTalkieManager {
     private const val JITTER_BUFFER_START_FRAMES = 2
     private const val JITTER_BUFFER_MAX_FRAMES = 8
     private const val PLAYBACK_IDLE_SLEEP_MS = 4L
+
+    private const val NOISE_CALIBRATION_FRAMES = 25
+    private const val NOISE_GATE_MULTIPLIER = 2.6f
+    private const val NOISE_SUBTRACT_RATIO = 0.45f
+    private const val NOISE_SILENCE_ATTENUATION = 0.08f
+    private const val NOISE_FLOOR_MIN = 80.0f
+    private const val NOISE_FLOOR_UPDATE_ALPHA = 0.03f
 
     @Volatile
     private var socket: DatagramSocket? = null
@@ -85,6 +93,11 @@ object WalkieTalkieManager {
     private val playbackQueue = ArrayDeque<ByteArray>()
 
     private var sequence = 0
+
+    private data class NoiseReductionState(
+        var calibratedFrames: Int = 0,
+        var noiseFloor: Float = 0.0f
+    )
 
     fun start(
         context: Context,
@@ -236,6 +249,7 @@ object WalkieTalkieManager {
                 )
 
                 val pcmFrame = ByteArray(FRAME_BYTES)
+                val noiseState = NoiseReductionState()
 
                 audioRecord.startRecording()
 
@@ -250,6 +264,11 @@ object WalkieTalkieManager {
                     if (!readOk) {
                         continue
                     }
+
+                    applyAdaptiveNoiseReductionInPlace(
+                        pcmBytes = pcmFrame,
+                        state = noiseState
+                    )
 
                     val opusBytes = encoder.encodePcm(pcmFrame)
 
@@ -301,6 +320,138 @@ object WalkieTalkieManager {
         }
 
         return offset == buffer.size
+    }
+
+    private fun applyAdaptiveNoiseReductionInPlace(
+        pcmBytes: ByteArray,
+        state: NoiseReductionState
+    ) {
+        val avgAbs = calculateAverageAbs(pcmBytes)
+
+        if (avgAbs <= 0.0f) return
+
+        if (state.calibratedFrames < NOISE_CALIBRATION_FRAMES) {
+            state.noiseFloor =
+                if (state.noiseFloor <= 0.0f) {
+                    avgAbs
+                } else {
+                    state.noiseFloor * 0.85f + avgAbs * 0.15f
+                }
+
+            state.calibratedFrames += 1
+            return
+        }
+
+        if (state.noiseFloor < NOISE_FLOOR_MIN) {
+            state.noiseFloor = NOISE_FLOOR_MIN
+        }
+
+        val gateThreshold = state.noiseFloor * NOISE_GATE_MULTIPLIER
+
+        if (avgAbs < gateThreshold) {
+            attenuatePcmInPlace(
+                pcmBytes = pcmBytes,
+                attenuation = NOISE_SILENCE_ATTENUATION
+            )
+
+            state.noiseFloor =
+                state.noiseFloor * (1.0f - NOISE_FLOOR_UPDATE_ALPHA) +
+                        avgAbs * NOISE_FLOOR_UPDATE_ALPHA
+
+            return
+        }
+
+        subtractNoiseFloorInPlace(
+            pcmBytes = pcmBytes,
+            noiseFloor = state.noiseFloor,
+            ratio = NOISE_SUBTRACT_RATIO
+        )
+    }
+
+    private fun calculateAverageAbs(
+        pcmBytes: ByteArray
+    ): Float {
+        var index = 0
+        var sum = 0L
+        var count = 0
+
+        while (index + 1 < pcmBytes.size) {
+            val low = pcmBytes[index].toInt() and 0xff
+            val high = pcmBytes[index + 1].toInt()
+            val sample = ((high shl 8) or low).toShort().toInt()
+
+            sum += abs(sample)
+            count += 1
+            index += 2
+        }
+
+        if (count == 0) return 0.0f
+
+        return sum.toFloat() / count.toFloat()
+    }
+
+    private fun attenuatePcmInPlace(
+        pcmBytes: ByteArray,
+        attenuation: Float
+    ) {
+        var index = 0
+
+        while (index + 1 < pcmBytes.size) {
+            val low = pcmBytes[index].toInt() and 0xff
+            val high = pcmBytes[index + 1].toInt()
+            val sample = ((high shl 8) or low).toShort().toInt()
+
+            val reduced = (sample * attenuation).toInt().coerceIn(
+                Short.MIN_VALUE.toInt(),
+                Short.MAX_VALUE.toInt()
+            )
+
+            pcmBytes[index] = (reduced and 0xff).toByte()
+            pcmBytes[index + 1] = ((reduced shr 8) and 0xff).toByte()
+
+            index += 2
+        }
+    }
+
+    private fun subtractNoiseFloorInPlace(
+        pcmBytes: ByteArray,
+        noiseFloor: Float,
+        ratio: Float
+    ) {
+        val subtractAmount = (noiseFloor * ratio).toInt()
+
+        if (subtractAmount <= 0) return
+
+        var index = 0
+
+        while (index + 1 < pcmBytes.size) {
+            val low = pcmBytes[index].toInt() and 0xff
+            val high = pcmBytes[index + 1].toInt()
+            val sample = ((high shl 8) or low).toShort().toInt()
+
+            val processed =
+                when {
+                    sample > subtractAmount -> {
+                        sample - subtractAmount
+                    }
+
+                    sample < -subtractAmount -> {
+                        sample + subtractAmount
+                    }
+
+                    else -> {
+                        (sample * NOISE_SILENCE_ATTENUATION).toInt()
+                    }
+                }.coerceIn(
+                    Short.MIN_VALUE.toInt(),
+                    Short.MAX_VALUE.toInt()
+                )
+
+            pcmBytes[index] = (processed and 0xff).toByte()
+            pcmBytes[index + 1] = ((processed shr 8) and 0xff).toByte()
+
+            index += 2
+        }
     }
 
     private fun sendAudioPacket(
