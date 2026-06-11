@@ -6,9 +6,11 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.media.AudioAttributes
 import android.media.AudioFormat
+import android.media.AudioManager
 import android.media.AudioRecord
 import android.media.AudioTrack
 import android.media.MediaRecorder
+import android.media.audiofx.AcousticEchoCanceler
 import android.net.wifi.WifiManager
 import android.util.Log
 import androidx.core.content.ContextCompat
@@ -19,7 +21,6 @@ import java.net.InetSocketAddress
 import java.nio.ByteOrder
 import java.util.ArrayDeque
 import kotlin.concurrent.thread
-import kotlin.math.abs
 import kotlin.math.max
 import net.jgpower.gichan_land.data.walkie.WalkieTarget
 import net.jgpower.gichan_land.data.walkie.WalkieTargetType
@@ -28,8 +29,11 @@ object WalkieTalkieManager {
 
     private const val TAG = "WALKIE"
 
-    private const val UDP_PORT = 51515
-    private const val CHANNEL_ID = 5
+    private const val APP_AUDIO_PORT = 60000
+    private const val MONITOR_AUDIO_PORT = 60001
+    private const val MONITOR_WORKER_ID = "monitor"
+
+    private const val CHANNEL_ID = 1
 
     private const val MAGIC_1 = 0xAA.toByte()
     private const val MAGIC_2 = 0x55.toByte()
@@ -52,12 +56,8 @@ object WalkieTalkieManager {
     private const val JITTER_BUFFER_MAX_FRAMES = 8
     private const val PLAYBACK_IDLE_SLEEP_MS = 4L
 
-    private const val NOISE_CALIBRATION_FRAMES = 25
-    private const val NOISE_GATE_MULTIPLIER = 2.6f
-    private const val NOISE_SUBTRACT_RATIO = 0.45f
-    private const val NOISE_SILENCE_ATTENUATION = 0.08f
-    private const val NOISE_FLOOR_MIN = 80.0f
-    private const val NOISE_FLOOR_UPDATE_ALPHA = 0.03f
+    @Volatile
+    private var appContext: Context? = null
 
     @Volatile
     private var socket: DatagramSocket? = null
@@ -94,16 +94,13 @@ object WalkieTalkieManager {
 
     private var sequence = 0
 
-    private data class NoiseReductionState(
-        var calibratedFrames: Int = 0,
-        var noiseFloor: Float = 0.0f
-    )
-
     fun start(
         context: Context,
         workerId: String,
         areaGroup: String
     ) {
+        appContext = context.applicationContext
+
         currentWorkerId = workerId
         currentAreaGroup = areaGroup
         broadcastAddress = getBroadcastAddress(context)
@@ -115,6 +112,7 @@ object WalkieTalkieManager {
             bitrate = OPUS_BITRATE
         )
 
+        enterCommunicationMode(context)
         initPlaybackTrack()
         startPlaybackLoop()
 
@@ -126,7 +124,7 @@ object WalkieTalkieManager {
         val newSocket = DatagramSocket(null).apply {
             reuseAddress = true
             broadcast = true
-            bind(InetSocketAddress(UDP_PORT))
+            bind(InetSocketAddress(APP_AUDIO_PORT))
         }
 
         socket = newSocket
@@ -135,7 +133,7 @@ object WalkieTalkieManager {
 
         Log.d(
             TAG,
-            "started workerId=$workerId areaGroup=$areaGroup sampleRate=$SAMPLE_RATE frameBytes=$FRAME_BYTES"
+            "started workerId=$workerId areaGroup=$areaGroup appPort=$APP_AUDIO_PORT monitorPort=$MONITOR_AUDIO_PORT sampleRate=$SAMPLE_RATE frameBytes=$FRAME_BYTES"
         )
     }
 
@@ -172,6 +170,11 @@ object WalkieTalkieManager {
             playbackTrack = null
         }
 
+        appContext?.let {
+            exitCommunicationMode(it)
+        }
+        appContext = null
+
         Log.d(TAG, "stopped")
     }
 
@@ -186,6 +189,36 @@ object WalkieTalkieManager {
 
     fun isStarted(): Boolean {
         return isReceiverRunning && socket != null
+    }
+
+    @Suppress("DEPRECATION")
+    private fun enterCommunicationMode(context: Context) {
+        try {
+            val audioManager =
+                context.applicationContext.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+
+            audioManager.mode = AudioManager.MODE_IN_COMMUNICATION
+            audioManager.isSpeakerphoneOn = true
+
+            Log.d(TAG, "audio mode set MODE_IN_COMMUNICATION speakerOn=true")
+        } catch (e: Exception) {
+            Log.e(TAG, "enter communication mode failed", e)
+        }
+    }
+
+    @Suppress("DEPRECATION")
+    private fun exitCommunicationMode(context: Context) {
+        try {
+            val audioManager =
+                context.applicationContext.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+
+            audioManager.mode = AudioManager.MODE_NORMAL
+            audioManager.isSpeakerphoneOn = false
+
+            Log.d(TAG, "audio mode restored MODE_NORMAL speakerOn=false")
+        } catch (e: Exception) {
+            Log.e(TAG, "exit communication mode failed", e)
+        }
     }
 
     @SuppressLint("MissingPermission")
@@ -219,6 +252,7 @@ object WalkieTalkieManager {
         thread(name = "walkie-transmit") {
             var audioRecord: AudioRecord? = null
             var encoder: OpusCodec? = null
+            var echoCanceler: AcousticEchoCanceler? = null
 
             try {
                 val minBuffer = AudioRecord.getMinBufferSize(
@@ -228,7 +262,7 @@ object WalkieTalkieManager {
                 )
 
                 audioRecord = AudioRecord(
-                    MediaRecorder.AudioSource.MIC,
+                    MediaRecorder.AudioSource.VOICE_COMMUNICATION,
                     SAMPLE_RATE,
                     AudioFormat.CHANNEL_IN_MONO,
                     AudioFormat.ENCODING_PCM_16BIT,
@@ -241,6 +275,14 @@ object WalkieTalkieManager {
                     return@thread
                 }
 
+                if (AcousticEchoCanceler.isAvailable()) {
+                    echoCanceler = AcousticEchoCanceler.create(audioRecord.audioSessionId)
+                    echoCanceler?.enabled = true
+                    Log.d(TAG, "AcousticEchoCanceler enabled=${echoCanceler?.enabled}")
+                } else {
+                    Log.d(TAG, "AcousticEchoCanceler not available")
+                }
+
                 encoder = OpusCodec(
                     sampleRate = SAMPLE_RATE,
                     channels = 1,
@@ -249,7 +291,6 @@ object WalkieTalkieManager {
                 )
 
                 val pcmFrame = ByteArray(FRAME_BYTES)
-                val noiseState = NoiseReductionState()
 
                 audioRecord.startRecording()
 
@@ -265,11 +306,6 @@ object WalkieTalkieManager {
                         continue
                     }
 
-                    applyAdaptiveNoiseReductionInPlace(
-                        pcmBytes = pcmFrame,
-                        state = noiseState
-                    )
-
                     val opusBytes = encoder.encodePcm(pcmFrame)
 
                     sendAudioPacket(
@@ -282,6 +318,11 @@ object WalkieTalkieManager {
             } catch (e: Exception) {
                 Log.e(TAG, "transmit failed", e)
             } finally {
+                try {
+                    echoCanceler?.release()
+                } catch (_: Exception) {
+                }
+
                 try {
                     audioRecord?.stop()
                 } catch (_: Exception) {
@@ -322,138 +363,6 @@ object WalkieTalkieManager {
         return offset == buffer.size
     }
 
-    private fun applyAdaptiveNoiseReductionInPlace(
-        pcmBytes: ByteArray,
-        state: NoiseReductionState
-    ) {
-        val avgAbs = calculateAverageAbs(pcmBytes)
-
-        if (avgAbs <= 0.0f) return
-
-        if (state.calibratedFrames < NOISE_CALIBRATION_FRAMES) {
-            state.noiseFloor =
-                if (state.noiseFloor <= 0.0f) {
-                    avgAbs
-                } else {
-                    state.noiseFloor * 0.85f + avgAbs * 0.15f
-                }
-
-            state.calibratedFrames += 1
-            return
-        }
-
-        if (state.noiseFloor < NOISE_FLOOR_MIN) {
-            state.noiseFloor = NOISE_FLOOR_MIN
-        }
-
-        val gateThreshold = state.noiseFloor * NOISE_GATE_MULTIPLIER
-
-        if (avgAbs < gateThreshold) {
-            attenuatePcmInPlace(
-                pcmBytes = pcmBytes,
-                attenuation = NOISE_SILENCE_ATTENUATION
-            )
-
-            state.noiseFloor =
-                state.noiseFloor * (1.0f - NOISE_FLOOR_UPDATE_ALPHA) +
-                        avgAbs * NOISE_FLOOR_UPDATE_ALPHA
-
-            return
-        }
-
-        subtractNoiseFloorInPlace(
-            pcmBytes = pcmBytes,
-            noiseFloor = state.noiseFloor,
-            ratio = NOISE_SUBTRACT_RATIO
-        )
-    }
-
-    private fun calculateAverageAbs(
-        pcmBytes: ByteArray
-    ): Float {
-        var index = 0
-        var sum = 0L
-        var count = 0
-
-        while (index + 1 < pcmBytes.size) {
-            val low = pcmBytes[index].toInt() and 0xff
-            val high = pcmBytes[index + 1].toInt()
-            val sample = ((high shl 8) or low).toShort().toInt()
-
-            sum += abs(sample)
-            count += 1
-            index += 2
-        }
-
-        if (count == 0) return 0.0f
-
-        return sum.toFloat() / count.toFloat()
-    }
-
-    private fun attenuatePcmInPlace(
-        pcmBytes: ByteArray,
-        attenuation: Float
-    ) {
-        var index = 0
-
-        while (index + 1 < pcmBytes.size) {
-            val low = pcmBytes[index].toInt() and 0xff
-            val high = pcmBytes[index + 1].toInt()
-            val sample = ((high shl 8) or low).toShort().toInt()
-
-            val reduced = (sample * attenuation).toInt().coerceIn(
-                Short.MIN_VALUE.toInt(),
-                Short.MAX_VALUE.toInt()
-            )
-
-            pcmBytes[index] = (reduced and 0xff).toByte()
-            pcmBytes[index + 1] = ((reduced shr 8) and 0xff).toByte()
-
-            index += 2
-        }
-    }
-
-    private fun subtractNoiseFloorInPlace(
-        pcmBytes: ByteArray,
-        noiseFloor: Float,
-        ratio: Float
-    ) {
-        val subtractAmount = (noiseFloor * ratio).toInt()
-
-        if (subtractAmount <= 0) return
-
-        var index = 0
-
-        while (index + 1 < pcmBytes.size) {
-            val low = pcmBytes[index].toInt() and 0xff
-            val high = pcmBytes[index + 1].toInt()
-            val sample = ((high shl 8) or low).toShort().toInt()
-
-            val processed =
-                when {
-                    sample > subtractAmount -> {
-                        sample - subtractAmount
-                    }
-
-                    sample < -subtractAmount -> {
-                        sample + subtractAmount
-                    }
-
-                    else -> {
-                        (sample * NOISE_SILENCE_ATTENUATION).toInt()
-                    }
-                }.coerceIn(
-                    Short.MIN_VALUE.toInt(),
-                    Short.MAX_VALUE.toInt()
-                )
-
-            pcmBytes[index] = (processed and 0xff).toByte()
-            pcmBytes[index + 1] = ((processed shr 8) and 0xff).toByte()
-
-            index += 2
-        }
-    }
-
     private fun sendAudioPacket(
         socket: DatagramSocket,
         senderWorkerId: String,
@@ -474,17 +383,65 @@ object WalkieTalkieManager {
             val address = broadcastAddress
                 ?: InetAddress.getByName("255.255.255.255")
 
-            val packet = DatagramPacket(
-                packetBytes,
-                packetBytes.size,
-                address,
-                UDP_PORT
-            )
+            val sendToAppUsers = shouldSendToAppUsers(target)
+            val sendToMonitor = shouldSendToMonitor(target)
 
-            socket.send(packet)
+            if (sendToAppUsers) {
+                val appPacket = DatagramPacket(
+                    packetBytes,
+                    packetBytes.size,
+                    address,
+                    APP_AUDIO_PORT
+                )
+
+                socket.send(appPacket)
+
+                Log.d(TAG, "sent audio to app port=$APP_AUDIO_PORT target=$target")
+            }
+
+            if (sendToMonitor) {
+                val monitorPacket = DatagramPacket(
+                    packetBytes,
+                    packetBytes.size,
+                    address,
+                    MONITOR_AUDIO_PORT
+                )
+
+                socket.send(monitorPacket)
+
+                Log.d(TAG, "sent audio to monitor port=$MONITOR_AUDIO_PORT target=$target")
+            }
         } catch (e: Exception) {
             Log.e(TAG, "send failed", e)
         }
+    }
+
+    private fun shouldSendToAppUsers(target: WalkieTarget): Boolean {
+        if (target.targetType != WalkieTargetType.USER) {
+            return true
+        }
+
+        val selectedWorkerIds = parseTargetWorkerIds(target.targetWorkerId)
+
+        return selectedWorkerIds.any { it != MONITOR_WORKER_ID }
+    }
+
+    private fun shouldSendToMonitor(target: WalkieTarget): Boolean {
+        if (target.targetType != WalkieTargetType.USER) {
+            return false
+        }
+
+        val selectedWorkerIds = parseTargetWorkerIds(target.targetWorkerId)
+
+        return selectedWorkerIds.contains(MONITOR_WORKER_ID)
+    }
+
+    private fun parseTargetWorkerIds(targetWorkerId: String?): List<String> {
+        return targetWorkerId
+            ?.split(",")
+            ?.map { it.trim() }
+            ?.filter { it.isNotBlank() }
+            ?: emptyList()
     }
 
     private fun buildPacket(
@@ -568,7 +525,7 @@ object WalkieTalkieManager {
         thread(name = "walkie-receiver") {
             val buffer = ByteArray(2048)
 
-            Log.d(TAG, "receiver started")
+            Log.d(TAG, "receiver started port=$APP_AUDIO_PORT")
 
             while (isReceiverRunning) {
                 try {
@@ -608,11 +565,7 @@ object WalkieTalkieManager {
 
             val isForMe = when (packet.targetType) {
                 WalkieTargetType.USER -> {
-                    packet.targetWorkerId
-                        .split(",")
-                        .map { it.trim() }
-                        .filter { it.isNotBlank() }
-                        .contains(myWorkerId)
+                    parseTargetWorkerIds(packet.targetWorkerId).contains(myWorkerId)
                 }
 
                 WalkieTargetType.GROUP -> {
@@ -655,7 +608,7 @@ object WalkieTalkieManager {
                 val track = AudioTrack.Builder()
                     .setAudioAttributes(
                         AudioAttributes.Builder()
-                            .setUsage(AudioAttributes.USAGE_MEDIA)
+                            .setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
                             .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
                             .build()
                     )
@@ -675,7 +628,7 @@ object WalkieTalkieManager {
 
                 playbackTrack = track
 
-                Log.d(TAG, "playback track started")
+                Log.d(TAG, "playback track started USAGE_VOICE_COMMUNICATION")
             } catch (e: Exception) {
                 playbackTrack = null
                 Log.e(TAG, "playback track init failed", e)
