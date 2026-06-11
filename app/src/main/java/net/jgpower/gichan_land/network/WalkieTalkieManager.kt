@@ -17,6 +17,7 @@ import java.net.DatagramSocket
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.nio.ByteOrder
+import java.util.ArrayDeque
 import kotlin.concurrent.thread
 import kotlin.math.max
 import net.jgpower.gichan_land.data.walkie.WalkieTarget
@@ -46,11 +47,18 @@ object WalkieTalkieManager {
 
     private const val MAX_PAYLOAD_BYTES = 1024
 
+    private const val JITTER_BUFFER_START_FRAMES = 2
+    private const val JITTER_BUFFER_MAX_FRAMES = 8
+    private const val PLAYBACK_IDLE_SLEEP_MS = 4L
+
     @Volatile
     private var socket: DatagramSocket? = null
 
     @Volatile
     private var isReceiverRunning = false
+
+    @Volatile
+    private var isPlaybackRunning = false
 
     @Volatile
     private var isTransmitting = false
@@ -73,7 +81,8 @@ object WalkieTalkieManager {
     @Volatile
     private var playbackTrack: AudioTrack? = null
 
-    private val playbackLock = Any()
+    private val playbackLock = Object()
+    private val playbackQueue = ArrayDeque<ByteArray>()
 
     private var sequence = 0
 
@@ -94,6 +103,7 @@ object WalkieTalkieManager {
         )
 
         initPlaybackTrack()
+        startPlaybackLoop()
 
         if (isReceiverRunning && socket != null) {
             Log.d(TAG, "already started. workerId=$workerId areaGroup=$areaGroup")
@@ -120,6 +130,12 @@ object WalkieTalkieManager {
         stopTransmit()
 
         isReceiverRunning = false
+        isPlaybackRunning = false
+
+        synchronized(playbackLock) {
+            playbackQueue.clear()
+            playbackLock.notifyAll()
+        }
 
         try {
             socket?.close()
@@ -466,7 +482,7 @@ object WalkieTalkieManager {
 
             if (decodedPcm.isEmpty()) return
 
-            playPcm(decodedPcm)
+            enqueuePlayback(decodedPcm)
         } catch (e: Exception) {
             Log.e(TAG, "handle packet failed", e)
         }
@@ -516,20 +532,75 @@ object WalkieTalkieManager {
         }
     }
 
-    private fun playPcm(pcmBytes: ByteArray) {
+    private fun enqueuePlayback(pcmBytes: ByteArray) {
         synchronized(playbackLock) {
-            try {
-                val track = playbackTrack ?: return
-
-                track.write(
-                    pcmBytes,
-                    0,
-                    pcmBytes.size,
-                    AudioTrack.WRITE_BLOCKING
-                )
-            } catch (e: Exception) {
-                Log.e(TAG, "play pcm failed", e)
+            while (playbackQueue.size >= JITTER_BUFFER_MAX_FRAMES) {
+                playbackQueue.removeFirst()
             }
+
+            playbackQueue.addLast(pcmBytes)
+            playbackLock.notifyAll()
+        }
+    }
+
+    private fun startPlaybackLoop() {
+        if (isPlaybackRunning) return
+
+        isPlaybackRunning = true
+
+        thread(name = "walkie-playback") {
+            var bufferPrimed = false
+
+            Log.d(TAG, "playback loop started")
+
+            while (isPlaybackRunning) {
+                val frame: ByteArray? =
+                    synchronized(playbackLock) {
+                        if (!bufferPrimed) {
+                            if (playbackQueue.size < JITTER_BUFFER_START_FRAMES) {
+                                null
+                            } else {
+                                bufferPrimed = true
+                                playbackQueue.removeFirst()
+                            }
+                        } else {
+                            if (playbackQueue.isEmpty()) {
+                                bufferPrimed = false
+                                null
+                            } else {
+                                playbackQueue.removeFirst()
+                            }
+                        }
+                    }
+
+                if (frame == null) {
+                    try {
+                        Thread.sleep(PLAYBACK_IDLE_SLEEP_MS)
+                    } catch (_: InterruptedException) {
+                    }
+
+                    continue
+                }
+
+                playPcm(frame)
+            }
+
+            Log.d(TAG, "playback loop stopped")
+        }
+    }
+
+    private fun playPcm(pcmBytes: ByteArray) {
+        try {
+            val track = playbackTrack ?: return
+
+            track.write(
+                pcmBytes,
+                0,
+                pcmBytes.size,
+                AudioTrack.WRITE_BLOCKING
+            )
+        } catch (e: Exception) {
+            Log.e(TAG, "play pcm failed", e)
         }
     }
 
