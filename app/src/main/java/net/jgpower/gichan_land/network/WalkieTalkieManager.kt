@@ -91,6 +91,7 @@ object WalkieTalkieManager {
         currentWorkerId = workerId
         currentAreaGroup = areaGroup
         broadcastAddress = getBroadcastAddress(context)
+
         opusDecoder = OpusCodec(
             sampleRate = SAMPLE_RATE,
             channels = 1,
@@ -432,9 +433,21 @@ object WalkieTalkieManager {
             if (packet.senderWorkerId == myWorkerId) return
 
             val isForMe = when (packet.targetType) {
-                WalkieTargetType.USER -> packet.targetWorkerId == myWorkerId
-                WalkieTargetType.GROUP -> packet.targetAreaGroup == myAreaGroup
-                WalkieTargetType.ALL -> true
+                WalkieTargetType.USER -> {
+                    packet.targetWorkerId
+                        .split(",")
+                        .map { it.trim() }
+                        .filter { it.isNotBlank() }
+                        .contains(myWorkerId)
+                }
+
+                WalkieTargetType.GROUP -> {
+                    packet.targetAreaGroup == myAreaGroup
+                }
+
+                WalkieTargetType.ALL -> {
+                    true
+                }
             }
 
             if (!isForMe) return
@@ -516,7 +529,7 @@ object WalkieTalkieManager {
             (data[index++].toInt() and 0xff) or
                     ((data[index++].toInt() and 0xff) shl 8)
 
-        if (payloadLen < 0 || index + payloadLen != crcIndex) return null
+        if (index + payloadLen != crcIndex) return null
 
         val payload = ByteArray(payloadLen)
         System.arraycopy(data, index, payload, 0, payloadLen)
@@ -715,6 +728,8 @@ object WalkieTalkieManager {
             InetAddress.getByName("255.255.255.255")
         }
     }
+
+
 
     private data class WalkieAudioPacket(
         val codec: Int,

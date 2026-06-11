@@ -6,9 +6,12 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.border
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -21,6 +24,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
@@ -34,6 +38,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -58,6 +63,7 @@ fun WalkieTalkieScreen(
     onBackClick: () -> Unit
 ) {
     val context = LocalContext.current
+    val scrollState = rememberScrollState()
 
     val onlineWorkers = remember { mutableStateListOf<OnlineWorkerDto>() }
 
@@ -65,8 +71,90 @@ fun WalkieTalkieScreen(
     var errorMessage by remember { mutableStateOf<String?>(null) }
 
     var myAreaGroup by remember { mutableStateOf<String?>(null) }
+    var isGroupSelected by remember { mutableStateOf(true) }
+
+    val selectedWorkerIds = remember {
+        mutableStateMapOf<String, OnlineWorkerDto>()
+    }
+
     var selectedTarget by remember { mutableStateOf<WalkieTarget?>(null) }
     var isMicOn by remember { mutableStateOf(false) }
+
+    fun workerDisplayName(worker: OnlineWorkerDto): String {
+        val name = worker.name
+        val id = worker.workerId
+
+        return when {
+            !name.isNullOrBlank() -> name
+            !id.isNullOrBlank() -> id
+            else -> "이름 없음"
+        }
+    }
+
+    fun workerDisplayId(worker: OnlineWorkerDto): String {
+        return worker.workerId?.takeIf { it.isNotBlank() } ?: "-"
+    }
+
+    fun updateWalkieTarget() {
+        selectedTarget =
+            if (isGroupSelected) {
+                WalkieTarget(
+                    targetType = WalkieTargetType.GROUP,
+                    targetAreaGroup = myAreaGroup
+                )
+            } else {
+                val ids = selectedWorkerIds.keys
+                    .filter { it.isNotBlank() }
+                    .joinToString(",")
+
+                if (ids.isBlank()) {
+                    null
+                } else {
+                    WalkieTarget(
+                        targetType = WalkieTargetType.USER,
+                        targetWorkerId = ids,
+                        targetWorkerName = selectedWorkerIds.values
+                            .joinToString(",") { workerDisplayName(it) },
+                        targetAreaGroup = myAreaGroup
+                    )
+                }
+            }
+
+        WalkieTalkieManager.setTarget(selectedTarget)
+    }
+
+    fun selectedTargetText(): String {
+        return if (isGroupSelected) {
+            "현재 송신 대상: 그룹 전체"
+        } else {
+            val names = selectedWorkerIds.values
+                .joinToString(", ") { workerDisplayName(it) }
+
+            "현재 송신 대상: ${names.ifBlank { "선택 없음" }}"
+        }
+    }
+
+    fun selectGroupAll() {
+        isGroupSelected = true
+        selectedWorkerIds.clear()
+        updateWalkieTarget()
+    }
+
+    fun toggleWorker(worker: OnlineWorkerDto) {
+        val targetWorkerId = worker.workerId?.trim() ?: return
+
+        if (targetWorkerId.isBlank()) return
+
+        isGroupSelected = false
+
+        if (selectedWorkerIds.containsKey(targetWorkerId)) {
+            selectedWorkerIds.remove(targetWorkerId)
+        } else {
+            selectedWorkerIds[targetWorkerId] = worker
+        }
+
+        updateWalkieTarget()
+    }
 
     fun exitScreen() {
         WalkieTalkieManager.stopTransmit()
@@ -104,15 +192,16 @@ fun WalkieTalkieScreen(
             onlineWorkers.clear()
             onlineWorkers.addAll(list)
 
-            val me = list.firstOrNull { it.workerId == workerId }
+            val me = list.firstOrNull {
+                it.workerId?.trim() == workerId
+            }
+
             myAreaGroup = me?.areaGroup
 
             if (selectedTarget == null && !myAreaGroup.isNullOrBlank()) {
-                selectedTarget = WalkieTarget(
-                    targetType = WalkieTargetType.GROUP,
-                    targetAreaGroup = myAreaGroup
-                )
-                WalkieTalkieManager.setTarget(selectedTarget)
+                isGroupSelected = true
+                selectedWorkerIds.clear()
+                updateWalkieTarget()
             }
         } catch (e: Exception) {
             errorMessage = "온라인 직원 목록 조회 실패: ${e.message}"
@@ -146,10 +235,14 @@ fun WalkieTalkieScreen(
         }
     }
 
-    val groupWorkers = onlineWorkers.filter {
-        it.workerId != workerId &&
-                !it.areaGroup.isNullOrBlank() &&
-                it.areaGroup == myAreaGroup
+    val groupWorkers = onlineWorkers.filter { worker ->
+        val otherWorkerId = worker.workerId?.trim()
+        val otherAreaGroup = worker.areaGroup
+
+        !otherWorkerId.isNullOrBlank() &&
+                otherWorkerId != workerId &&
+                !otherAreaGroup.isNullOrBlank() &&
+                otherAreaGroup == myAreaGroup
     }
 
     Scaffold(
@@ -175,6 +268,7 @@ fun WalkieTalkieScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
+                .verticalScroll(scrollState)
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
@@ -210,13 +304,9 @@ fun WalkieTalkieScreen(
                     )
 
                     FilterChip(
-                        selected = selectedTarget?.targetType == WalkieTargetType.GROUP,
+                        selected = isGroupSelected,
                         onClick = {
-                            selectedTarget = WalkieTarget(
-                                targetType = WalkieTargetType.GROUP,
-                                targetAreaGroup = myAreaGroup
-                            )
-                            WalkieTalkieManager.setTarget(selectedTarget)
+                            selectGroupAll()
                         },
                         label = {
                             Text("그룹 전체")
@@ -224,29 +314,44 @@ fun WalkieTalkieScreen(
                         enabled = !myAreaGroup.isNullOrBlank()
                     )
 
+                    Text(
+                        text = "개별 직원 선택",
+                        fontWeight = FontWeight.Bold
+                    )
+
                     if (groupWorkers.isEmpty()) {
-                        Text("현재 같은 그룹에 접속 중인 직원이 없습니다.")
+                        Text(
+                            text = "현재 같은 그룹에 접속 중인 직원이 없습니다.",
+                            style = MaterialTheme.typography.bodySmall
+                        )
                     } else {
                         groupWorkers.forEach { worker ->
-                            FilterChip(
-                                selected =
-                                    selectedTarget?.targetType == WalkieTargetType.USER &&
-                                            selectedTarget?.targetWorkerId == worker.workerId,
-                                onClick = {
-                                    selectedTarget = WalkieTarget(
-                                        targetType = WalkieTargetType.USER,
-                                        targetWorkerId = worker.workerId,
-                                        targetWorkerName = worker.name,
-                                        targetAreaGroup = worker.areaGroup
-                                    )
-                                    WalkieTalkieManager.setTarget(selectedTarget)
-                                },
-                                label = {
-                                    Text("${worker.name} (${worker.workerId})")
-                                }
-                            )
+                            val targetWorkerId = worker.workerId?.trim() ?: return@forEach
+                            val checked = selectedWorkerIds.containsKey(targetWorkerId)
+
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Checkbox(
+                                    checked = checked,
+                                    onCheckedChange = {
+                                        toggleWorker(worker)
+                                    }
+                                )
+
+                                Text(
+                                    text = "${workerDisplayName(worker)} (${workerDisplayId(worker)})"
+                                )
+                            }
                         }
                     }
+
+                    Text(
+                        text = selectedTargetText(),
+                        style = MaterialTheme.typography.bodySmall
+                    )
                 }
             }
 
@@ -317,6 +422,7 @@ fun WalkieTalkieScreen(
                             text = "MIC",
                             fontWeight = FontWeight.Bold
                         )
+
                         Text(
                             text = if (isMicOn) "OFF" else "ON"
                         )
@@ -332,8 +438,6 @@ fun WalkieTalkieScreen(
                 },
                 modifier = Modifier.fillMaxWidth()
             )
-
-
         }
     }
 }

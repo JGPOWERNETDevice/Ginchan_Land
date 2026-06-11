@@ -95,7 +95,7 @@ fun AppNavigation(
             repeat(10) { index ->
                 try {
                     val workers = ApiServiceManager.apiService.getOnlineWorkers()
-                    val me = workers.firstOrNull { it.workerId == workerId }
+                    val me = workers.firstOrNull { it.workerId?.trim() == workerId }
                     val areaGroup = me?.areaGroup
 
                     if (!areaGroup.isNullOrBlank()) {
