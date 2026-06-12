@@ -24,12 +24,17 @@ import kotlin.concurrent.thread
 import kotlin.math.max
 import net.jgpower.gichan_land.data.walkie.WalkieTarget
 import net.jgpower.gichan_land.data.walkie.WalkieTargetType
-
+import android.media.AudioDeviceCallback
+import android.media.AudioDeviceInfo
+import android.os.Build
+import android.os.Handler
+import android.os.Looper
 object WalkieTalkieManager {
 
     private const val TAG = "WALKIE"
 
     private const val UDP_PORT = 60000
+
     private const val CHANNEL_ID = 1
 
     private const val MAGIC_1 = 0xAA.toByte()
@@ -84,6 +89,9 @@ object WalkieTalkieManager {
     private var opusDecoder: OpusCodec? = null
 
     @Volatile
+    private var audioDeviceCallback: AudioDeviceCallback? = null
+
+    @Volatile
     private var playbackTrack: AudioTrack? = null
 
     private val playbackLock = Object()
@@ -110,6 +118,9 @@ object WalkieTalkieManager {
         )
 
         enterCommunicationMode(context)
+        enterCommunicationMode(context)
+        registerAudioDeviceCallback(context)
+        routeCommunicationAudioDevice(context)
         initPlaybackTrack()
         startPlaybackLoop()
 
@@ -791,6 +802,116 @@ object WalkieTalkieManager {
             InetAddress.getByAddress(bytes)
         } catch (_: Exception) {
             InetAddress.getByName("255.255.255.255")
+        }
+    }
+
+    private fun hasBluetoothConnectPermission(context: Context): Boolean {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            ContextCompat.checkSelfPermission(
+                context,
+                Manifest.permission.BLUETOOTH_CONNECT
+            ) == PackageManager.PERMISSION_GRANTED
+        } else {
+            true
+        }
+    }
+
+    private fun registerAudioDeviceCallback(context: Context) {
+        if (audioDeviceCallback != null) return
+
+        val audioManager =
+            context.applicationContext.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+
+        audioDeviceCallback =
+            object : AudioDeviceCallback() {
+                override fun onAudioDevicesAdded(addedDevices: Array<out AudioDeviceInfo>) {
+                    routeCommunicationAudioDevice(context)
+                }
+
+                override fun onAudioDevicesRemoved(removedDevices: Array<out AudioDeviceInfo>) {
+                    routeCommunicationAudioDevice(context)
+                }
+            }
+
+        audioManager.registerAudioDeviceCallback(
+            audioDeviceCallback,
+            Handler(Looper.getMainLooper())
+        )
+    }
+
+    private fun unregisterAudioDeviceCallback(context: Context) {
+        val callback = audioDeviceCallback ?: return
+
+        try {
+            val audioManager =
+                context.applicationContext.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+
+            audioManager.unregisterAudioDeviceCallback(callback)
+        } catch (e: Exception) {
+            Log.e(TAG, "unregister audio device callback failed", e)
+        } finally {
+            audioDeviceCallback = null
+        }
+    }
+
+    @Suppress("DEPRECATION")
+    private fun routeCommunicationAudioDevice(context: Context) {
+        try {
+            val audioManager =
+                context.applicationContext.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+
+            audioManager.mode = AudioManager.MODE_IN_COMMUNICATION
+
+            if (!hasBluetoothConnectPermission(context)) {
+                audioManager.isSpeakerphoneOn = true
+                Log.d(TAG, "BLUETOOTH_CONNECT permission missing. speaker output used")
+                return
+            }
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                val bluetoothDevice =
+                    audioManager.availableCommunicationDevices.firstOrNull { device ->
+                        device.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO ||
+                                device.type == AudioDeviceInfo.TYPE_BLE_HEADSET
+                    }
+
+                if (bluetoothDevice != null) {
+                    audioManager.isSpeakerphoneOn = false
+
+                    val result = audioManager.setCommunicationDevice(bluetoothDevice)
+
+                    Log.d(
+                        TAG,
+                        "bluetooth communication device selected result=$result type=${bluetoothDevice.type} name=${bluetoothDevice.productName}"
+                    )
+                } else {
+                    audioManager.clearCommunicationDevice()
+                    audioManager.isSpeakerphoneOn = true
+
+                    Log.d(TAG, "no bluetooth communication device. speaker output used")
+                }
+            } else {
+                val hasBluetoothSco =
+                    audioManager.getDevices(AudioManager.GET_DEVICES_OUTPUTS).any { device ->
+                        device.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO
+                    }
+
+                if (hasBluetoothSco) {
+                    audioManager.isSpeakerphoneOn = false
+                    audioManager.startBluetoothSco()
+                    audioManager.isBluetoothScoOn = true
+
+                    Log.d(TAG, "legacy bluetooth SCO started")
+                } else {
+                    audioManager.stopBluetoothSco()
+                    audioManager.isBluetoothScoOn = false
+                    audioManager.isSpeakerphoneOn = true
+
+                    Log.d(TAG, "legacy bluetooth SCO not found. speaker output used")
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "route communication audio device failed", e)
         }
     }
 

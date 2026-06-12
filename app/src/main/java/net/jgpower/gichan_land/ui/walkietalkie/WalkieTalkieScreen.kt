@@ -2,6 +2,7 @@ package net.jgpower.gichan_land.ui.walkietalkie
 
 import android.Manifest
 import android.content.pm.PackageManager
+import android.os.Build
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -82,6 +83,36 @@ fun WalkieTalkieScreen(
 
     var selectedTarget by remember { mutableStateOf<WalkieTarget?>(null) }
     var isMicOn by remember { mutableStateOf(false) }
+
+    fun hasRecordAudioPermission(): Boolean {
+        return ContextCompat.checkSelfPermission(
+            context,
+            Manifest.permission.RECORD_AUDIO
+        ) == PackageManager.PERMISSION_GRANTED
+    }
+
+    fun hasBluetoothConnectPermission(): Boolean {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            ContextCompat.checkSelfPermission(
+                context,
+                Manifest.permission.BLUETOOTH_CONNECT
+            ) == PackageManager.PERMISSION_GRANTED
+        } else {
+            true
+        }
+    }
+
+    fun requiredWalkiePermissions(): Array<String> {
+        val permissions = mutableListOf(
+            Manifest.permission.RECORD_AUDIO
+        )
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            permissions.add(Manifest.permission.BLUETOOTH_CONNECT)
+        }
+
+        return permissions.toTypedArray()
+    }
 
     fun workerDisplayName(worker: OnlineWorkerDto): String {
         val id = worker.workerId?.trim()
@@ -171,23 +202,54 @@ fun WalkieTalkieScreen(
         onBackClick()
     }
 
+    fun startMicIfPossible() {
+        if (selectedTarget == null) {
+            errorMessage = "송신 대상을 선택하세요."
+            return
+        }
+
+        if (!hasRecordAudioPermission() || !hasBluetoothConnectPermission()) {
+            errorMessage = null
+            return
+        }
+
+        val started = WalkieTalkieManager.startTransmit(context)
+        isMicOn = started
+
+        if (!started) {
+            errorMessage = "무전 송신을 시작할 수 없습니다."
+        }
+    }
+
     BackHandler {
         exitScreen()
     }
 
-    val micPermissionLauncher =
+    val permissionLauncher =
         rememberLauncherForActivityResult(
-            ActivityResultContracts.RequestPermission()
-        ) { granted ->
-            if (granted) {
-                val started = WalkieTalkieManager.startTransmit(context)
-                isMicOn = started
+            ActivityResultContracts.RequestMultiplePermissions()
+        ) { result ->
+            val micGranted =
+                result[Manifest.permission.RECORD_AUDIO] == true ||
+                        hasRecordAudioPermission()
 
-                if (!started) {
-                    errorMessage = "무전 송신을 시작할 수 없습니다."
+            val bluetoothGranted =
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    result[Manifest.permission.BLUETOOTH_CONNECT] == true ||
+                            hasBluetoothConnectPermission()
+                } else {
+                    true
                 }
+
+            if (micGranted && bluetoothGranted) {
+                startMicIfPossible()
             } else {
-                errorMessage = "마이크 권한이 필요합니다."
+                errorMessage =
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                        "마이크 및 블루투스 권한이 필요합니다."
+                    } else {
+                        "마이크 권한이 필요합니다."
+                    }
             }
         }
 
@@ -387,25 +449,10 @@ fun WalkieTalkieScreen(
                                 return@Button
                             }
 
-                            val granted =
-                                ContextCompat.checkSelfPermission(
-                                    context,
-                                    Manifest.permission.RECORD_AUDIO
-                                ) == PackageManager.PERMISSION_GRANTED
-
-                            if (granted) {
-                                val started =
-                                    WalkieTalkieManager.startTransmit(context)
-
-                                isMicOn = started
-
-                                if (!started) {
-                                    errorMessage = "무전 송신을 시작할 수 없습니다."
-                                }
+                            if (hasRecordAudioPermission() && hasBluetoothConnectPermission()) {
+                                startMicIfPossible()
                             } else {
-                                micPermissionLauncher.launch(
-                                    Manifest.permission.RECORD_AUDIO
-                                )
+                                permissionLauncher.launch(requiredWalkiePermissions())
                             }
                         }
                     },
