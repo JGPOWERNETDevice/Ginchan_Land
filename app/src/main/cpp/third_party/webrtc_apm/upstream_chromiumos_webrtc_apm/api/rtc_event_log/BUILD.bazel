@@ -1,0 +1,26 @@
+# Copyright 2023 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+load("//:defs.bzl", "COPTS")
+
+package(
+    default_visibility = ["//:__subpackages__"],
+)
+
+cc_library(
+    name = "rtc_event_log",
+    srcs = [
+        "rtc_event.cc",
+        "rtc_event_log.cc",
+    ],
+    hdrs = [
+        "rtc_event.h",
+        "rtc_event_log.h",
+    ],
+    copts = COPTS,
+    deps = [
+        "//api:libjingle_logging_api",
+        "//rtc_base:timeutils",
+    ],
+)

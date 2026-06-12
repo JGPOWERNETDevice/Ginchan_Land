@@ -1,0 +1,33 @@
+# Copyright 2023 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+load("//:defs.bzl", "COPTS")
+
+package(
+    default_visibility = ["//:__subpackages__"],
+)
+
+cc_library(
+    name = "audio_frame_operations",
+    srcs = [
+        "audio_frame_operations.cc",
+        "channel_mixer.cc",
+        "channel_mixing_matrix.cc",
+    ],
+    hdrs = [
+        "audio_frame_operations.h",
+        "channel_mixer.h",
+        "channel_mixing_matrix.h",
+    ],
+    copts = COPTS,
+    deps = [
+        "//api:array_view",
+        "//api/audio:audio_frame_api",
+        "//common_audio",
+        "//rtc_base:checks",
+        "//rtc_base:logging",
+        "//rtc_base:safe_conversions",
+        "@com_google_absl//absl/base:core_headers",
+    ],
+)

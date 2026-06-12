@@ -1,0 +1,67 @@
+# Copyright 2023 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+load("//:defs.bzl", "COPTS")
+
+package(
+    default_visibility = ["//:__subpackages__"],
+)
+
+cc_library(
+    name = "arch",
+    hdrs = ["arch.h"],
+    copts = COPTS,
+)
+
+cc_library(
+    name = "file_wrapper",
+    srcs = ["file_wrapper.cc"],
+    hdrs = ["file_wrapper.h"],
+    copts = COPTS,
+    deps = [
+        "//rtc_base:checks",
+        "//rtc_base:criticalsection",
+        "//rtc_base:safe_conversions",
+        "@com_google_absl//absl/strings:string_view",
+    ],
+)
+
+cc_library(
+    name = "ignore_warnings",
+    hdrs = ["ignore_warnings.h"],
+    copts = COPTS,
+)
+
+cc_library(
+    name = "inline",
+    hdrs = ["inline.h"],
+    copts = COPTS,
+)
+
+cc_library(
+    name = "no_unique_address",
+    hdrs = ["no_unique_address.h"],
+    copts = COPTS,
+)
+
+cc_library(
+    name = "rtc_export",
+    hdrs = [
+        "rtc_export.h",
+        "rtc_export_template.h",
+    ],
+    copts = COPTS,
+)
+
+cc_library(
+    name = "unused",
+    hdrs = ["unused.h"],
+    copts = COPTS,
+)
+
+cc_library(
+    name = "warn_current_thread_is_deadlocked",
+    hdrs = ["warn_current_thread_is_deadlocked.h"],
+    copts = COPTS,
+)

@@ -1,0 +1,6 @@
+Place the original WebRTC LICENSE file here.
+
+Use the official WebRTC license source:
+https://webrtc.googlesource.com/src/+/refs/heads/main/LICENSE
+
+Do not paraphrase or shorten the real license file when distributing WebRTC source/binary artifacts.

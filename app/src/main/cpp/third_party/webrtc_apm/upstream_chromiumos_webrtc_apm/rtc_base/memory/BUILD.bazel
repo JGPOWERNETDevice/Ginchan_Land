@@ -1,0 +1,24 @@
+# Copyright 2023 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+load("//:defs.bzl", "COPTS")
+
+package(
+    default_visibility = ["//:__subpackages__"],
+)
+
+cc_library(
+    name = "aligned_malloc",
+    srcs = ["aligned_malloc.cc"],
+    hdrs = ["aligned_malloc.h"],
+    copts = COPTS,
+    deps = ["//rtc_base:checks"],
+)
+
+cc_library(
+    name = "always_valid_pointer",
+    hdrs = ["always_valid_pointer.h"],
+    copts = COPTS,
+    deps = ["//rtc_base:checks"],
+)

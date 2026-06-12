@@ -1,0 +1,7 @@
+#ifndef COMPAT_ABSL_BASE_CONFIG_H_
+#define COMPAT_ABSL_BASE_CONFIG_H_
+
+#define ABSL_USES_STD_STRING_VIEW 1
+#define ABSL_CONST_INIT
+
+#endif

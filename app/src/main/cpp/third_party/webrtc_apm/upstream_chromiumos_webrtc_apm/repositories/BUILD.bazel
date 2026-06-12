@@ -1,0 +1,12 @@
+# Copyright 2023 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+alias(
+    name = "metrics_library",
+    actual = select({
+        "//:chromiumos_build": "@pkg_config//libmetrics",
+        "//conditions:default": "//repositories/metrics_library_stub",
+    }),
+    visibility = ["//webrtc_apm:__pkg__"],
+)

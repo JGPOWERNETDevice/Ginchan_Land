@@ -1,0 +1,149 @@
+# Copyright 2023 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+load("//:defs.bzl", "COPTS")
+
+package(
+    default_visibility = ["//:__subpackages__"],
+)
+
+cc_library(
+    name = "array_view",
+    hdrs = ["array_view.h"],
+    copts = COPTS,
+    deps = [
+        "//rtc_base:checks",
+        "//rtc_base:type_traits",
+    ],
+)
+
+cc_library(
+    name = "field_trials_registry",
+    srcs = ["field_trials_registry.cc"],
+    hdrs = ["field_trials_registry.h"],
+    copts = COPTS,
+    deps = [
+        ":field_trials_view",
+        "//experiments:registered_field_trials",
+        "//rtc_base:checks",
+        "//rtc_base:logging",
+        "//rtc_base/containers:flat_set",
+        "//rtc_base/system:rtc_export",
+        "@com_google_absl//absl/algorithm:container",
+        "@com_google_absl//absl/strings:string_view",
+    ],
+)
+
+cc_library(
+    name = "field_trials_view",
+    hdrs = ["field_trials_view.h"],
+    copts = COPTS,
+    deps = [
+        "//rtc_base/system:rtc_export",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:string_view",
+    ],
+)
+
+cc_library(
+    name = "function_view",
+    hdrs = ["function_view.h"],
+    copts = COPTS,
+    deps = ["//rtc_base:checks"],
+)
+
+cc_library(
+    name = "libjingle_logging_api",
+    hdrs = ["rtc_event_log_output.h"],
+    copts = COPTS,
+    deps = ["@com_google_absl//absl/strings:string_view"],
+)
+
+cc_library(
+    name = "location",
+    hdrs = ["location.h"],
+    copts = COPTS,
+    deps = ["//rtc_base/system:rtc_export"],
+)
+
+cc_library(
+    name = "make_ref_counted",
+    hdrs = ["make_ref_counted.h"],
+    copts = COPTS,
+    deps = [
+        ":ref_count",
+        ":scoped_refptr",
+        "//rtc_base:refcount",
+        "@com_google_absl//absl/base:nullability",
+    ],
+)
+
+cc_library(
+    name = "ref_count",
+    hdrs = ["ref_count.h"],
+    copts = COPTS,
+)
+
+cc_library(
+    name = "refcountedbase",
+    hdrs = ["ref_counted_base.h"],
+    copts = COPTS,
+    deps = [
+        ":ref_count",
+        "//rtc_base:refcount",
+    ],
+)
+
+cc_library(
+    name = "rtp_headers",
+    srcs = ["rtp_headers.cc"],
+    hdrs = ["rtp_headers.h"],
+    copts = COPTS,
+    deps = [
+        ":array_view",
+        "//api/units:timestamp",
+        "//api/video:video_rtp_headers",
+        "//rtc_base:checks",
+        "//rtc_base/system:rtc_export",
+    ],
+)
+
+cc_library(
+    name = "rtp_packet_info",
+    srcs = ["rtp_packet_info.cc"],
+    hdrs = [
+        "rtp_packet_info.h",
+        "rtp_packet_infos.h",
+    ],
+    copts = COPTS,
+    deps = [
+        ":array_view",
+        ":make_ref_counted",
+        ":refcountedbase",
+        ":rtp_headers",
+        ":scoped_refptr",
+        "//api/units:time_delta",
+        "//api/units:timestamp",
+        "//rtc_base/system:rtc_export",
+    ],
+)
+
+cc_library(
+    name = "scoped_refptr",
+    hdrs = ["scoped_refptr.h"],
+    copts = COPTS,
+    deps = ["@com_google_absl//absl/base:nullability"],
+)
+
+cc_library(
+    name = "sequence_checker",
+    hdrs = ["sequence_checker.h"],
+    copts = COPTS,
+    deps = [
+        "//api/task_queue",
+        "//rtc_base:checks",
+        "//rtc_base:macromagic",
+        "//rtc_base/synchronization:sequence_checker_internal",
+    ],
+)

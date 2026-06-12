@@ -1,0 +1,96 @@
+# Copyright 2023 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
+load("@bazel_tools//tools/build_defs/repo:git.bzl", "git_repository")
+
+http_archive(
+    name = "bazel_skylib",
+    sha256 = "b8a1527901774180afc798aeb28c4634bdccf19c4d98e7bdd1ce79d1fe9aaad7",
+    urls = [
+        "https://mirror.bazel.build/github.com/bazelbuild/bazel-skylib/releases/download/1.4.1/bazel-skylib-1.4.1.tar.gz",
+        "https://github.com/bazelbuild/bazel-skylib/releases/download/1.4.1/bazel-skylib-1.4.1.tar.gz",
+    ],
+)
+
+load("@bazel_skylib//:workspace.bzl", "bazel_skylib_workspace")
+
+bazel_skylib_workspace()
+
+http_archive(
+    name = "com_google_googletest",
+    sha256 = "ad7fdba11ea011c1d925b3289cf4af2c66a352e18d4c7264392fead75e919363",
+    strip_prefix = "googletest-1.13.0",
+    urls = ["https://github.com/google/googletest/archive/refs/tags/v1.13.0.tar.gz"],
+)
+
+http_archive(
+    name = "abseil-cpp",
+    sha256 = "36b5bd2aa3ab0b9de05851481585bb55db1aa0ffb386a00b2b12db2a76554b2b",
+    strip_prefix = "abseil-cpp-20240116.3",
+    urls = ["https://github.com/abseil/abseil-cpp/archive/refs/tags/20240116.3.zip"],
+)
+
+http_archive(
+    name = "com_github_google_benchmark",
+    sha256 = "6430e4092653380d9dc4ccb45a1e2dc9259d581f4866dc0759713126056bc1d7",
+    strip_prefix = "benchmark-1.7.1",
+    urls = [
+        "https://github.com/google/benchmark/archive/refs/tags/v1.7.1.tar.gz",
+        "https://storage.googleapis.com/chromeos-localmirror/distfiles/google-benchmark-v1.7.1.tar.gz",
+    ],
+)
+
+COM_GOOGLE_PROTOBUF_VERSION = "21.12"
+
+http_archive(
+    name = "com_google_protobuf",
+    sha256 = "22fdaf641b31655d4b2297f9981fa5203b2866f8332d3c6333f6b0107bb320de",
+    strip_prefix = "protobuf-{}".format(COM_GOOGLE_PROTOBUF_VERSION),
+    urls = [
+        "https://mirror.bazel.build/github.com/protocolbuffers/protobuf/archive/v{}.tar.gz".format(COM_GOOGLE_PROTOBUF_VERSION),
+        "https://github.com/protocolbuffers/protobuf/archive/v{}.tar.gz".format(COM_GOOGLE_PROTOBUF_VERSION),
+    ],
+)
+
+load("@com_google_protobuf//:protobuf_deps.bzl", "protobuf_deps")
+
+protobuf_deps()
+
+ADHD_URL = "https://chromium.googlesource.com/chromiumos/third_party/adhd"
+
+ADHD_COMMIT = "fcf1e883259cfde58c9e8be0267cce6ea270b6c0"
+
+git_repository(
+    name = "rules_pkg_config",
+    commit = ADHD_COMMIT,
+    remote = ADHD_URL,
+)
+
+load("@rules_pkg_config//:pkg_config.bzl", "pkg_config_repository")
+
+pkg_config_repository(
+    name = "pkg_config",
+    libs = [
+        "libevent",
+        "gmock",
+        "gtest",
+        "gtest_main",
+    ],
+)
+
+http_archive(
+    name = "iniparser",
+    build_file = "//:BUILD.iniparser.bazel",
+    sha256 = "aedf23881b834519aea5e861b2400606d211da049cd59d3cfb4568e0d9eff5c5",
+    strip_prefix = "iniparser/src",
+    urls = [
+        "https://storage.googleapis.com/chromeos-localmirror/distfiles/iniparser-3.1.tar.gz",
+        "http://ndevilla.free.fr/iniparser/iniparser-3.1.tar.gz",
+    ],
+)
+
+load(":deps.bzl", "file_deps")
+
+file_deps()

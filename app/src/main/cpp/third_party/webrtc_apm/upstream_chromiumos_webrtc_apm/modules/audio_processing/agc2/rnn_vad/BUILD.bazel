@@ -1,0 +1,206 @@
+# Copyright 2023 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+load("//:defs.bzl", "AVX2_COPTS", "COPTS")
+
+package(
+    default_visibility = ["//:__subpackages__"],
+)
+
+cc_library(
+    name = "rnn_vad",
+    srcs = [
+        "features_extraction.cc",
+        "rnn.cc",
+    ],
+    hdrs = [
+        "features_extraction.h",
+        "rnn.h",
+    ],
+    copts = COPTS,
+    deps = [
+        ":rnn_vad_common",
+        ":rnn_vad_layers",
+        ":rnn_vad_lp_residual",
+        ":rnn_vad_pitch",
+        ":rnn_vad_sequence_buffer",
+        ":rnn_vad_spectral_features",
+        "//api:array_view",
+        "//modules/audio_processing/agc2:biquad_filter",
+        "//modules/audio_processing/agc2:cpu_features",
+        "//rtc_base:checks",
+        "//rtc_base:safe_compare",
+        "//rtc_base:safe_conversions",
+        "//third_party/rnnoise:rnn_vad",
+    ],
+)
+
+cc_library(
+    name = "rnn_vad_auto_correlation",
+    srcs = ["auto_correlation.cc"],
+    hdrs = ["auto_correlation.h"],
+    copts = COPTS,
+    deps = [
+        ":rnn_vad_common",
+        "//api:array_view",
+        "//modules/audio_processing/utility:pffft_wrapper",
+        "//rtc_base:checks",
+    ],
+)
+
+cc_library(
+    name = "rnn_vad_common",
+    hdrs = ["common.h"],
+    copts = COPTS,
+    deps = [
+        "//rtc_base/system:arch",
+        "//system_wrappers",
+    ],
+)
+
+cc_library(
+    name = "rnn_vad_layers",
+    srcs = [
+        "rnn_fc.cc",
+        "rnn_gru.cc",
+    ],
+    hdrs = [
+        "rnn_fc.h",
+        "rnn_gru.h",
+    ],
+    copts = COPTS,
+    deps = [
+        ":rnn_vad_common",
+        ":vector_math",
+        "//api:array_view",
+        "//api:function_view",
+        "//modules/audio_processing/agc2:cpu_features",
+        "//rtc_base:checks",
+        "//rtc_base:safe_conversions",
+        "//third_party/rnnoise:rnn_vad",
+        "@com_google_absl//absl/strings:string_view",
+    ] + select({
+        "@platforms//cpu:x86_64": [":vector_math_avx2"],
+        "//conditions:default": [],
+    }),
+)
+
+cc_library(
+    name = "rnn_vad_lp_residual",
+    srcs = ["lp_residual.cc"],
+    hdrs = ["lp_residual.h"],
+    copts = COPTS,
+    deps = [
+        "//api:array_view",
+        "//rtc_base:checks",
+        "//rtc_base:safe_compare",
+    ],
+)
+
+cc_library(
+    name = "rnn_vad_pitch",
+    srcs = [
+        "pitch_search.cc",
+        "pitch_search_internal.cc",
+    ],
+    hdrs = [
+        "pitch_search.h",
+        "pitch_search_internal.h",
+    ],
+    copts = COPTS,
+    deps = [
+        ":rnn_vad_auto_correlation",
+        ":rnn_vad_common",
+        ":vector_math",
+        "//api:array_view",
+        "//modules/audio_processing/agc2:cpu_features",
+        "//rtc_base:checks",
+        "//rtc_base:gtest_prod",
+        "//rtc_base:safe_compare",
+        "//rtc_base:safe_conversions",
+        "//rtc_base/system:arch",
+    ] + select({
+        "@platforms//cpu:x86_64": [":vector_math_avx2"],
+        "//conditions:default": [],
+    }),
+)
+
+cc_library(
+    name = "rnn_vad_ring_buffer",
+    hdrs = ["ring_buffer.h"],
+    copts = COPTS,
+    deps = [
+        "//api:array_view",
+        "//rtc_base:checks",
+    ],
+)
+
+cc_library(
+    name = "rnn_vad_sequence_buffer",
+    hdrs = ["sequence_buffer.h"],
+    copts = COPTS,
+    deps = [
+        "//api:array_view",
+        "//rtc_base:checks",
+    ],
+)
+
+cc_library(
+    name = "rnn_vad_spectral_features",
+    srcs = [
+        "spectral_features.cc",
+        "spectral_features_internal.cc",
+    ],
+    hdrs = [
+        "spectral_features.h",
+        "spectral_features_internal.h",
+    ],
+    copts = COPTS,
+    deps = [
+        ":rnn_vad_common",
+        ":rnn_vad_ring_buffer",
+        ":rnn_vad_symmetric_matrix_buffer",
+        "//api:array_view",
+        "//modules/audio_processing/utility:pffft_wrapper",
+        "//rtc_base:checks",
+        "//rtc_base:safe_compare",
+    ],
+)
+
+cc_library(
+    name = "rnn_vad_symmetric_matrix_buffer",
+    hdrs = ["symmetric_matrix_buffer.h"],
+    copts = COPTS,
+    deps = [
+        "//api:array_view",
+        "//rtc_base:checks",
+        "//rtc_base:safe_compare",
+    ],
+)
+
+cc_library(
+    name = "vector_math",
+    hdrs = ["vector_math.h"],
+    copts = COPTS,
+    deps = [
+        "//api:array_view",
+        "//modules/audio_processing/agc2:cpu_features",
+        "//rtc_base:checks",
+        "//rtc_base:safe_conversions",
+        "//rtc_base/system:arch",
+    ],
+)
+
+cc_library(
+    name = "vector_math_avx2",
+    srcs = ["vector_math_avx2.cc"],
+    copts = COPTS + AVX2_COPTS,
+    target_compatible_with = ["@platforms//cpu:x86_64"],
+    deps = [
+        ":vector_math",
+        "//api:array_view",
+        "//rtc_base:checks",
+        "//rtc_base:safe_conversions",
+    ],
+)

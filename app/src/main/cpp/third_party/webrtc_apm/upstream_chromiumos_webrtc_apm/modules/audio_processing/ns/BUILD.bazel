@@ -1,0 +1,61 @@
+# Copyright 2023 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+load("//:defs.bzl", "COPTS")
+
+package(
+    default_visibility = ["//:__subpackages__"],
+)
+
+cc_library(
+    name = "ns",
+    srcs = [
+        "fast_math.cc",
+        "histograms.cc",
+        "noise_estimator.cc",
+        "noise_suppressor.cc",
+        "ns_fft.cc",
+        "prior_signal_model.cc",
+        "prior_signal_model_estimator.cc",
+        "quantile_noise_estimator.cc",
+        "signal_model.cc",
+        "signal_model_estimator.cc",
+        "speech_probability_estimator.cc",
+        "suppression_params.cc",
+        "wiener_filter.cc",
+    ],
+    hdrs = [
+        "fast_math.h",
+        "histograms.h",
+        "noise_estimator.h",
+        "noise_suppressor.h",
+        "ns_common.h",
+        "ns_config.h",
+        "ns_fft.h",
+        "prior_signal_model.h",
+        "prior_signal_model_estimator.h",
+        "quantile_noise_estimator.h",
+        "signal_model.h",
+        "signal_model_estimator.h",
+        "speech_probability_estimator.h",
+        "suppression_params.h",
+        "wiener_filter.h",
+    ],
+    copts = COPTS,
+    deps = [
+        "//api:array_view",
+        "//common_audio:common_audio_c",
+        "//common_audio/third_party/ooura:fft_size_128",
+        "//common_audio/third_party/ooura:fft_size_256",
+        "//modules/audio_processing:apm_logging",
+        "//modules/audio_processing:audio_buffer",
+        "//modules/audio_processing:high_pass_filter",
+        "//modules/audio_processing/utility:cascaded_biquad_filter",
+        "//rtc_base:checks",
+        "//rtc_base:safe_minmax",
+        "//rtc_base/system:arch",
+        "//system_wrappers",
+        "//system_wrappers:metrics",
+    ],
+)

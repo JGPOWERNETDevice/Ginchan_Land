@@ -1,0 +1,84 @@
+# Copyright 2023 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+load("//:defs.bzl", "COPTS")
+
+package(
+    default_visibility = ["//:__subpackages__"],
+)
+
+cc_library(
+    name = "data_rate",
+    srcs = ["data_rate.cc"],
+    hdrs = ["data_rate.h"],
+    copts = COPTS,
+    deps = [
+        ":data_size",
+        ":frequency",
+        ":time_delta",
+        "//api:array_view",
+        "//rtc_base:checks",
+        "//rtc_base:stringutils",
+        "//rtc_base/system:rtc_export",
+        "//rtc_base/units:unit_base",
+    ],
+)
+
+cc_library(
+    name = "data_size",
+    srcs = ["data_size.cc"],
+    hdrs = ["data_size.h"],
+    copts = COPTS,
+    deps = [
+        "//api:array_view",
+        "//rtc_base:checks",
+        "//rtc_base:stringutils",
+        "//rtc_base/system:rtc_export",
+        "//rtc_base/units:unit_base",
+    ],
+)
+
+cc_library(
+    name = "frequency",
+    srcs = ["frequency.cc"],
+    hdrs = ["frequency.h"],
+    copts = COPTS,
+    deps = [
+        ":time_delta",
+        "//api:array_view",
+        "//rtc_base:checks",
+        "//rtc_base:stringutils",
+        "//rtc_base/system:rtc_export",
+        "//rtc_base/units:unit_base",
+    ],
+)
+
+cc_library(
+    name = "time_delta",
+    srcs = ["time_delta.cc"],
+    hdrs = ["time_delta.h"],
+    copts = COPTS,
+    deps = [
+        "//api:array_view",
+        "//rtc_base:checks",
+        "//rtc_base:stringutils",
+        "//rtc_base/system:rtc_export",
+        "//rtc_base/units:unit_base",
+    ],
+)
+
+cc_library(
+    name = "timestamp",
+    srcs = ["timestamp.cc"],
+    hdrs = ["timestamp.h"],
+    copts = COPTS,
+    deps = [
+        ":time_delta",
+        "//api:array_view",
+        "//rtc_base:checks",
+        "//rtc_base:stringutils",
+        "//rtc_base/system:rtc_export",
+        "//rtc_base/units:unit_base",
+    ],
+)

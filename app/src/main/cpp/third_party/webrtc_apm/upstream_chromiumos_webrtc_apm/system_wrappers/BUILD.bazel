@@ -1,0 +1,60 @@
+# Copyright 2023 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+load("//:defs.bzl", "COPTS")
+
+package(
+    default_visibility = ["//:__subpackages__"],
+)
+
+cc_library(
+    name = "field_trial",
+    srcs = ["source/field_trial.cc"],
+    hdrs = ["include/field_trial.h"],
+    copts = COPTS,
+    deps = [
+        "//rtc_base:checks",
+        "//rtc_base:logging",
+        "//rtc_base:stringutils",
+        "@com_google_absl//absl/strings:string_view",
+    ],
+)
+
+cc_library(
+    name = "metrics",
+    srcs = ["source/metrics.cc"],
+    hdrs = ["include/metrics.h"],
+    copts = COPTS,
+    deps = [
+        "//api/units:time_delta",
+        "//rtc_base:checks",
+        "//rtc_base:macromagic",
+        "//rtc_base:stringutils",
+        "//rtc_base/synchronization:mutex",
+        "@com_google_absl//absl/strings:string_view",
+    ],
+)
+
+cc_library(
+    name = "system_wrappers",
+    srcs = ["source/clock.cc"],
+    hdrs = [
+        "include/clock.h",
+        "include/ntp_time.h",
+    ],
+    copts = COPTS,
+    deps = [
+        "//api:array_view",
+        "//api/units:time_delta",
+        "//api/units:timestamp",
+        "//rtc_base:checks",
+        "//rtc_base:divide_round",
+        "//rtc_base:logging",
+        "//rtc_base:rtc_numerics",
+        "//rtc_base:safe_conversions",
+        "//rtc_base:timeutils",
+        "//rtc_base/synchronization:mutex",
+        "//rtc_base/system:rtc_export",
+    ],
+)

@@ -1,0 +1,62 @@
+# Copyright 2023 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+load("//:defs.bzl", "COPTS")
+
+package(
+    default_visibility = ["//:__subpackages__"],
+)
+
+cc_library(
+    name = "mutex",
+    hdrs = [
+        "mutex.h",
+        "mutex_critical_section.h",
+        "mutex_pthread.h",
+    ],
+    copts = COPTS,
+    deps = [
+        ":yield",
+        "//rtc_base:checks",
+        "//rtc_base:macromagic",
+        "//rtc_base:platform_thread_types",
+        "//rtc_base/system:no_unique_address",
+        "@com_google_absl//absl/base:core_headers",
+    ],
+)
+
+cc_library(
+    name = "sequence_checker_internal",
+    srcs = ["sequence_checker_internal.cc"],
+    hdrs = ["sequence_checker_internal.h"],
+    copts = COPTS,
+    deps = [
+        ":mutex",
+        "//api/task_queue",
+        "//rtc_base:checks",
+        "//rtc_base:macromagic",
+        "//rtc_base:platform_thread_types",
+        "//rtc_base:stringutils",
+        "//rtc_base/system:rtc_export",
+    ],
+)
+
+cc_library(
+    name = "yield",
+    srcs = ["yield.cc"],
+    hdrs = ["yield.h"],
+    copts = COPTS,
+)
+
+cc_library(
+    name = "yield_policy",
+    srcs = ["yield_policy.cc"],
+    hdrs = ["yield_policy.h"],
+    copts = COPTS,
+    deps = [
+        "//rtc_base:checks",
+        "@com_google_absl//absl/base:config",
+        "@com_google_absl//absl/base:core_headers",
+    ],
+)

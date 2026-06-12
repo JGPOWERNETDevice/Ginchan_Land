@@ -58,6 +58,8 @@ object WalkieTalkieManager {
     private const val JITTER_BUFFER_MAX_FRAMES = 8
     private const val PLAYBACK_IDLE_SLEEP_MS = 4L
 
+    private const val USE_WEBRTC_APM = true
+
     @Volatile
     private var appContext: Context? = null
 
@@ -94,6 +96,9 @@ object WalkieTalkieManager {
     @Volatile
     private var playbackTrack: AudioTrack? = null
 
+    @Volatile
+    private var audioProcessor: WebRtcAudioProcessor? = null
+
     private val playbackLock = Object()
     private val playbackQueue = ArrayDeque<ByteArray>()
 
@@ -117,7 +122,17 @@ object WalkieTalkieManager {
             bitrate = OPUS_BITRATE
         )
 
-        enterCommunicationMode(context)
+        audioProcessor =
+            if (USE_WEBRTC_APM) {
+                WebRtcAudioProcessor(
+                    sampleRate = SAMPLE_RATE,
+                    channels = 1,
+                    frameBytes = FRAME_BYTES
+                )
+            } else {
+                null
+            }
+
         enterCommunicationMode(context)
         registerAudioDeviceCallback(context)
         routeCommunicationAudioDevice(context)
@@ -164,6 +179,12 @@ object WalkieTalkieManager {
         socket = null
         opusDecoder = null
 
+        try {
+            audioProcessor?.release()
+        } catch (_: Exception) {
+        }
+        audioProcessor = null
+
         synchronized(playbackLock) {
             try {
                 playbackTrack?.stop()
@@ -179,6 +200,7 @@ object WalkieTalkieManager {
         }
 
         appContext?.let {
+            unregisterAudioDeviceCallback(it)
             exitCommunicationMode(it)
         }
         appContext = null
@@ -299,6 +321,7 @@ object WalkieTalkieManager {
                 )
 
                 val pcmFrame = ByteArray(FRAME_BYTES)
+                val processor = audioProcessor
 
                 audioRecord.startRecording()
 
@@ -313,6 +336,8 @@ object WalkieTalkieManager {
                     if (!readOk) {
                         continue
                     }
+
+                    processor?.processCaptureFrameInPlace(pcmFrame)
 
                     val opusBytes = encoder.encodePcm(pcmFrame)
 
@@ -549,6 +574,8 @@ object WalkieTalkieManager {
                 opusDecoder?.decodeToPcm(packet.payload) ?: return
 
             if (decodedPcm.isEmpty()) return
+
+            audioProcessor?.processRenderFrame(decodedPcm)
 
             enqueuePlayback(decodedPcm)
         } catch (e: Exception) {

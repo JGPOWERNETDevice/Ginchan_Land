@@ -1,0 +1,8 @@
+ChromiumOS standalone webrtc-apm source archive:
+https://chromium.googlesource.com/chromiumos/third_party/webrtc-apm/+archive/refs/heads/main.tar.gz
+
+Repository:
+https://chromium.googlesource.com/chromiumos/third_party/webrtc-apm/
+
+Use with WebRTC license notice:
+https://webrtc.org/support/license

@@ -1,0 +1,63 @@
+cmake_minimum_required(VERSION 3.22.1)
+
+project(webrtc_apm_jni)
+
+# Stage 2 optional prebuilt switch.
+#
+# Keep this OFF until actual WebRTC APM headers and libraries are placed under:
+#
+# app/src/main/cpp/third_party/webrtc_apm/include
+# app/src/main/cpp/third_party/webrtc_apm/lib/${ANDROID_ABI}
+#
+# With OFF, the current safe no-op JNI bridge still builds.
+set(USE_PREBUILT_WEBRTC_APM OFF)
+
+add_library(
+        webrtc_apm_jni
+        SHARED
+        webrtc_apm_jni.cpp
+)
+
+find_library(
+        log-lib
+        log
+)
+
+target_link_libraries(
+        webrtc_apm_jni
+        ${log-lib}
+)
+
+if (USE_PREBUILT_WEBRTC_APM)
+    set(WEBRTC_APM_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/third_party/webrtc_apm)
+
+    target_compile_definitions(
+            webrtc_apm_jni
+            PRIVATE
+            USE_PREBUILT_WEBRTC_APM=1
+    )
+
+    target_include_directories(
+            webrtc_apm_jni
+            PRIVATE
+            ${WEBRTC_APM_ROOT}/include
+    )
+
+    add_library(
+            webrtc_audio_processing
+            STATIC
+            IMPORTED
+    )
+
+    set_target_properties(
+            webrtc_audio_processing
+            PROPERTIES
+            IMPORTED_LOCATION
+            ${WEBRTC_APM_ROOT}/lib/${ANDROID_ABI}/libwebrtc_audio_processing.a
+    )
+
+    target_link_libraries(
+            webrtc_apm_jni
+            webrtc_audio_processing
+    )
+endif()

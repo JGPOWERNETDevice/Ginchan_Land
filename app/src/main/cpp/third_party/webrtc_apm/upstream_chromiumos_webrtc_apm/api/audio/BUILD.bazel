@@ -1,0 +1,118 @@
+# Copyright 2023 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+load("//:defs.bzl", "COPTS")
+
+package(
+    default_visibility = ["//:__subpackages__"],
+)
+
+cc_library(
+    name = "aec3_config",
+    srcs = ["echo_canceller3_config.cc"],
+    hdrs = ["echo_canceller3_config.h"],
+    copts = COPTS,
+    deps = [
+        "//rtc_base:checks",
+        "//rtc_base:safe_minmax",
+        "//rtc_base/system:rtc_export",
+    ],
+)
+
+cc_library(
+    name = "aec3_factory",
+    srcs = ["echo_canceller3_factory.cc"],
+    hdrs = ["echo_canceller3_factory.h"],
+    copts = COPTS,
+    deps = [
+        ":aec3_config",
+        ":echo_control",
+        "//api/environment",
+        "//modules/audio_processing/aec3",
+        "//rtc_base/system:rtc_export",
+        "@com_google_absl//absl/base:nullability",
+    ],
+)
+
+cc_library(
+    name = "audio_frame_api",
+    srcs = [
+        "audio_frame.cc",
+        "channel_layout.cc",
+    ],
+    hdrs = [
+        "audio_frame.h",
+        "audio_view.h",
+        "channel_layout.h",
+    ],
+    copts = COPTS,
+    deps = [
+        "//api:array_view",
+        "//api:rtp_packet_info",
+        "//rtc_base:checks",
+        "//rtc_base:logging",
+        "//rtc_base:timeutils",
+    ],
+)
+
+cc_library(
+    name = "audio_processing",
+    srcs = ["audio_processing.cc"],
+    hdrs = ["audio_processing.h"],
+    copts = COPTS,
+    deps = [
+        ":aec3_config",
+        ":audio_processing_statistics",
+        ":echo_control",
+        "//api:array_view",
+        "//api:ref_count",
+        "//api:scoped_refptr",
+        "//api/environment",
+        "//api/task_queue",
+        "//rtc_base:checks",
+        "//rtc_base:stringutils",
+        "//rtc_base/system:arch",
+        "//rtc_base/system:file_wrapper",
+        "//rtc_base/system:rtc_export",
+        "@com_google_absl//absl/base:nullability",
+        "@com_google_absl//absl/strings:string_view",
+    ],
+)
+
+cc_library(
+    name = "audio_processing_statistics",
+    srcs = ["audio_processing_statistics.cc"],
+    hdrs = ["audio_processing_statistics.h"],
+    copts = COPTS,
+    deps = ["//rtc_base/system:rtc_export"],
+)
+
+cc_library(
+    name = "builtin_audio_processing_builder",
+    srcs = ["builtin_audio_processing_builder.cc"],
+    hdrs = ["builtin_audio_processing_builder.h"],
+    copts = COPTS,
+    deps = [
+        ":audio_processing",
+        ":echo_control",
+        "//api:make_ref_counted",
+        "//api:scoped_refptr",
+        "//api/environment",
+        "//modules/audio_processing",
+        "//rtc_base:logging",
+        "//rtc_base/system:rtc_export",
+        "@com_google_absl//absl/base:nullability",
+    ],
+)
+
+cc_library(
+    name = "echo_control",
+    hdrs = ["echo_control.h"],
+    copts = COPTS,
+    deps = [
+        "//api/environment",
+        "//rtc_base:checks",
+        "@com_google_absl//absl/base:nullability",
+    ],
+)

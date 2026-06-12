@@ -1,0 +1,61 @@
+# Copyright 2023 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+load("@bazel_skylib//rules:common_settings.bzl", "bool_flag")
+
+# Tests that are run with the media-sound/adhd ebuild.
+test_suite(
+    name = "tests",
+    tests = [
+        "//webrtc_apm:webrtc_apm_test",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+bool_flag(
+    name = "neon",
+    build_setting_default = False,
+)
+
+config_setting(
+    name = "neon_build",
+    flag_values = {
+        ":neon": "true",
+    },
+    visibility = ["//:__subpackages__"],
+)
+
+config_setting(
+    name = "aarch32_build",
+    constraint_values = [
+        "@platforms//cpu:aarch32",
+    ],
+)
+
+config_setting(
+    name = "aarch64_build",
+    constraint_values = [
+        "@platforms//cpu:aarch64",
+    ],
+)
+
+bool_flag(
+    name = "chromiumos",
+    build_setting_default = False,
+)
+
+config_setting(
+    name = "chromiumos_build",
+    flag_values = {
+        ":chromiumos": "true",
+    },
+    visibility = ["//:__subpackages__"],
+)
+
+exports_files(
+    srcs = ["deps.bzl"],
+    visibility = [
+        "@adhd//:__subpackages__",  # To allow diff test to ensure it is in sync.
+    ],
+)

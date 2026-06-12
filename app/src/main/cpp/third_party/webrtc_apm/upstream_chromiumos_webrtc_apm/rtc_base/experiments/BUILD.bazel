@@ -1,0 +1,38 @@
+# Copyright 2023 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+load("//:defs.bzl", "COPTS")
+
+package(
+    default_visibility = ["//:__subpackages__"],
+)
+
+cc_library(
+    name = "field_trial_parser",
+    srcs = [
+        "field_trial_list.cc",
+        "field_trial_parser.cc",
+        "field_trial_units.cc",
+        "struct_parameters_parser.cc",
+    ],
+    hdrs = [
+        "field_trial_list.h",
+        "field_trial_parser.h",
+        "field_trial_units.h",
+        "struct_parameters_parser.h",
+    ],
+    copts = COPTS,
+    deps = [
+        "//api/units:data_rate",
+        "//api/units:data_size",
+        "//api/units:time_delta",
+        "//rtc_base:checks",
+        "//rtc_base:logging",
+        "//rtc_base:safe_conversions",
+        "//rtc_base:stringutils",
+        "@com_google_absl//absl/memory",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:string_view",
+    ],
+)

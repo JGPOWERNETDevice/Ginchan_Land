@@ -1,0 +1,47 @@
+# Copyright 2023 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+load("//:defs.bzl", "COPTS")
+
+package(
+    default_visibility = ["//:__subpackages__"],
+)
+
+cc_library(
+    name = "cascaded_biquad_filter",
+    srcs = ["cascaded_biquad_filter.cc"],
+    hdrs = ["cascaded_biquad_filter.h"],
+    copts = COPTS,
+    deps = [
+        "//api:array_view",
+        "//rtc_base:checks",
+    ],
+)
+
+cc_library(
+    name = "legacy_delay_estimator",
+    srcs = [
+        "delay_estimator.cc",
+        "delay_estimator_wrapper.cc",
+    ],
+    hdrs = [
+        "delay_estimator.h",
+        "delay_estimator_internal.h",
+        "delay_estimator_wrapper.h",
+    ],
+    copts = COPTS,
+    deps = ["//rtc_base:checks"],
+)
+
+cc_library(
+    name = "pffft_wrapper",
+    srcs = ["pffft_wrapper.cc"],
+    hdrs = ["pffft_wrapper.h"],
+    copts = COPTS,
+    deps = [
+        "//api:array_view",
+        "//rtc_base:checks",
+        "//third_party/pffft",
+    ],
+)

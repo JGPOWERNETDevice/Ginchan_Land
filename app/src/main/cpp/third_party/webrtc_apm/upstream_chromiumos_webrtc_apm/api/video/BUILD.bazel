@@ -1,0 +1,37 @@
+# Copyright 2023 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+load("//:defs.bzl", "COPTS")
+
+package(
+    default_visibility = ["//:__subpackages__"],
+)
+
+cc_library(
+    name = "video_rtp_headers",
+    srcs = [
+        "color_space.cc",
+        "hdr_metadata.cc",
+        "video_content_type.cc",
+        "video_timing.cc",
+    ],
+    hdrs = [
+        "color_space.h",
+        "hdr_metadata.h",
+        "video_content_type.h",
+        "video_rotation.h",
+        "video_timing.h",
+    ],
+    copts = COPTS,
+    deps = [
+        "//api:array_view",
+        "//api/units:data_rate",
+        "//api/units:time_delta",
+        "//rtc_base:checks",
+        "//rtc_base:logging",
+        "//rtc_base:safe_conversions",
+        "//rtc_base:stringutils",
+        "//rtc_base/system:rtc_export",
+    ],
+)

@@ -1,0 +1,28 @@
+# Copyright 2023 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+load("//:defs.bzl", "COPTS")
+
+package(
+    default_visibility = ["//:__subpackages__"],
+)
+
+cc_library(
+    name = "capture_levels_adjuster",
+    srcs = [
+        "audio_samples_scaler.cc",
+        "capture_levels_adjuster.cc",
+    ],
+    hdrs = [
+        "audio_samples_scaler.h",
+        "capture_levels_adjuster.h",
+    ],
+    copts = COPTS,
+    deps = [
+        "//api:array_view",
+        "//modules/audio_processing:audio_buffer",
+        "//rtc_base:checks",
+        "//rtc_base:safe_minmax",
+    ],
+)

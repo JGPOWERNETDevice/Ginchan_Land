@@ -1,0 +1,86 @@
+# Copyright 2023 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+load("//:defs.bzl", "COPTS")
+
+package(
+    default_visibility = ["//:__subpackages__"],
+)
+
+cc_library(
+    name = "agc",
+    srcs = ["agc_manager_direct.cc"],
+    hdrs = ["agc_manager_direct.h"],
+    copts = COPTS,
+    deps = [
+        ":gain_control_interface",
+        ":level_estimation",
+        "//api:array_view",
+        "//api:field_trials_view",
+        "//api/audio:audio_processing",
+        "//api/environment",
+        "//common_audio",
+        "//common_audio:common_audio_c",
+        "//modules/audio_processing:apm_logging",
+        "//modules/audio_processing:audio_buffer",
+        "//modules/audio_processing:audio_frame_view",
+        "//modules/audio_processing/agc2:clipping_predictor",
+        "//modules/audio_processing/agc2:gain_map",
+        "//modules/audio_processing/agc2:input_volume_stats_reporter",
+        "//modules/audio_processing/vad",
+        "//rtc_base:checks",
+        "//rtc_base:gtest_prod",
+        "//rtc_base:logging",
+        "//rtc_base:safe_minmax",
+        "//system_wrappers:metrics",
+    ],
+)
+
+cc_library(
+    name = "gain_control_interface",
+    hdrs = ["gain_control.h"],
+    copts = COPTS,
+)
+
+cc_library(
+    name = "legacy_agc",
+    srcs = [
+        "legacy/analog_agc.cc",
+        "legacy/digital_agc.cc",
+    ],
+    hdrs = [
+        "legacy/analog_agc.h",
+        "legacy/digital_agc.h",
+        "legacy/gain_control.h",
+    ],
+    copts = COPTS,
+    deps = [
+        "//common_audio",
+        "//common_audio:common_audio_c",
+        "//common_audio:common_audio_cc",
+        "//common_audio/third_party/ooura:fft_size_256",
+        "//rtc_base:checks",
+        "//system_wrappers",
+    ],
+)
+
+cc_library(
+    name = "level_estimation",
+    srcs = [
+        "agc.cc",
+        "loudness_histogram.cc",
+        "utility.cc",
+    ],
+    hdrs = [
+        "agc.h",
+        "loudness_histogram.h",
+        "utility.h",
+    ],
+    copts = COPTS,
+    deps = [
+        "//api:array_view",
+        "//modules/audio_processing/vad",
+        "//rtc_base:checks",
+    ],
+)

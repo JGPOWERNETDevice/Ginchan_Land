@@ -1,0 +1,361 @@
+# Copyright 2023 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+load("//:defs.bzl", "COPTS")
+
+package(
+    default_visibility = ["//:__subpackages__"],
+)
+
+cc_library(
+    name = "checks",
+    srcs = ["checks.cc"],
+    hdrs = ["checks.h"],
+    copts = COPTS,
+    deps = [
+        ":safe_compare",
+        ":type_traits",
+        "//api:scoped_refptr",
+        "//rtc_base/system:inline",
+        "//rtc_base/system:rtc_export",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:string_view",
+    ],
+)
+
+cc_library(
+    name = "compile_assert_c",
+    hdrs = ["compile_assert_c.h"],
+    copts = COPTS,
+)
+
+cc_library(
+    name = "cpu_info",
+    srcs = ["cpu_info.cc"],
+    hdrs = ["cpu_info.h"],
+    copts = COPTS,
+    deps = [
+        ":checks",
+        ":logging",
+        "//rtc_base/system:arch",
+        "//rtc_base/system:unused",
+    ],
+)
+
+cc_library(
+    name = "criticalsection",
+    srcs = ["//rtc_base/deprecated:recursive_critical_section.cc"],
+    hdrs = ["//rtc_base/deprecated:recursive_critical_section.h"],
+    copts = COPTS,
+    deps = [
+        ":checks",
+        ":macromagic",
+        ":platform_thread_types",
+        "//rtc_base/synchronization:yield",
+        "//rtc_base/system:unused",
+    ],
+)
+
+cc_library(
+    name = "denormal_disabler",
+    srcs = ["denormal_disabler.cc"],
+    hdrs = ["denormal_disabler.h"],
+    copts = COPTS,
+    deps = [
+        ":checks",
+        "//rtc_base/system:arch",
+    ],
+)
+
+cc_library(
+    name = "divide_round",
+    hdrs = ["//rtc_base/numerics:divide_round.h"],
+    copts = COPTS,
+    deps = [
+        ":checks",
+        ":safe_compare",
+    ],
+)
+
+cc_library(
+    name = "event_tracer",
+    srcs = [
+        "event_tracer.cc",
+        "trace_categories.cc",
+    ],
+    hdrs = [
+        "event_tracer.h",
+        "trace_categories.h",
+        "trace_event.h",
+    ],
+    copts = COPTS,
+    deps = [
+        ":checks",
+        ":logging",
+        ":macromagic",
+        ":platform_thread",
+        ":platform_thread_types",
+        ":rtc_event",
+        ":timeutils",
+        "//api:sequence_checker",
+        "//api/units:time_delta",
+        "//rtc_base/synchronization:mutex",
+        "//rtc_base/system:rtc_export",
+        "@com_google_absl//absl/strings:string_view",
+    ],
+)
+
+cc_library(
+    name = "gtest_prod",
+    hdrs = ["gtest_prod_util.h"],
+    copts = COPTS,
+)
+
+cc_library(
+    name = "logging",
+    srcs = ["logging.cc"],
+    hdrs = ["logging.h"],
+    copts = COPTS,
+    deps = [
+        ":checks",
+        ":macromagic",
+        ":platform_thread_types",
+        ":stringutils",
+        ":timeutils",
+        ":type_traits",
+        "//api/units:timestamp",
+        "//rtc_base/synchronization:mutex",
+        "//rtc_base/system:inline",
+        "@com_google_absl//absl/base:core_headers",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:string_view",
+    ],
+)
+
+cc_library(
+    name = "macromagic",
+    hdrs = ["thread_annotations.h"],
+    copts = COPTS,
+)
+
+cc_library(
+    name = "mod_ops",
+    hdrs = ["//rtc_base/numerics:mod_ops.h"],
+    copts = COPTS,
+    deps = [":checks"],
+)
+
+cc_library(
+    name = "platform_thread",
+    srcs = ["platform_thread.cc"],
+    hdrs = ["platform_thread.h"],
+    copts = COPTS,
+    deps = [
+        ":checks",
+        ":platform_thread_types",
+        ":rtc_event",
+        ":timeutils",
+        "//api:sequence_checker",
+        "@com_google_absl//absl/strings:string_view",
+    ],
+)
+
+cc_library(
+    name = "platform_thread_types",
+    srcs = ["platform_thread_types.cc"],
+    hdrs = ["platform_thread_types.h"],
+    copts = COPTS,
+    deps = [":checks"],
+)
+
+cc_library(
+    name = "protobuf_utils",
+    hdrs = ["protobuf_utils.h"],
+    copts = COPTS,
+)
+
+cc_library(
+    name = "race_checker",
+    srcs = ["race_checker.cc"],
+    hdrs = ["race_checker.h"],
+    copts = COPTS,
+    deps = [
+        ":checks",
+        ":macromagic",
+        ":platform_thread_types",
+    ],
+)
+
+cc_library(
+    name = "refcount",
+    hdrs = [
+        "ref_count.h",
+        "ref_counted_object.h",
+        "ref_counter.h",
+    ],
+    copts = COPTS,
+    deps = [
+        "//api:ref_count",
+        "//api:scoped_refptr",
+    ],
+)
+
+cc_library(
+    name = "rtc_event",
+    srcs = ["event.cc"],
+    hdrs = ["event.h"],
+    copts = COPTS,
+    deps = [
+        ":checks",
+        "//api/units:time_delta",
+        "//rtc_base/synchronization:yield_policy",
+        "//rtc_base/system:warn_current_thread_is_deadlocked",
+    ],
+)
+
+cc_library(
+    name = "rtc_numerics",
+    srcs = [
+        "//rtc_base/numerics:event_based_exponential_moving_average.cc",
+        "//rtc_base/numerics:exp_filter.cc",
+        "//rtc_base/numerics:moving_average.cc",
+    ],
+    hdrs = [
+        "//rtc_base/numerics:event_based_exponential_moving_average.h",
+        "//rtc_base/numerics:exp_filter.h",
+        "//rtc_base/numerics:math_utils.h",
+        "//rtc_base/numerics:moving_average.h",
+        "//rtc_base/numerics:moving_percentile_filter.h",
+        "//rtc_base/numerics:percentile_filter.h",
+        "//rtc_base/numerics:rational.h",
+        "//rtc_base/numerics:running_statistics.h",
+        "//rtc_base/numerics:sequence_number_unwrapper.h",
+        "//rtc_base/numerics:sequence_number_util.h",
+    ],
+    copts = COPTS,
+    deps = [
+        ":checks",
+        ":mod_ops",
+    ],
+)
+
+cc_library(
+    name = "rtc_task_queue_stdlib",
+    srcs = ["task_queue_stdlib.cc"],
+    hdrs = ["task_queue_stdlib.h"],
+    copts = COPTS,
+    deps = [
+        ":checks",
+        ":divide_round",
+        ":logging",
+        ":macromagic",
+        ":platform_thread",
+        ":rtc_event",
+        ":safe_conversions",
+        ":timeutils",
+        "//api:location",
+        "//api/task_queue",
+        "//api/units:time_delta",
+        "//rtc_base/synchronization:mutex",
+        "@com_google_absl//absl/functional:any_invocable",
+        "@com_google_absl//absl/strings:string_view",
+    ],
+)
+
+cc_library(
+    name = "safe_compare",
+    hdrs = ["//rtc_base/numerics:safe_compare.h"],
+    copts = COPTS,
+    deps = [":type_traits"],
+)
+
+cc_library(
+    name = "safe_conversions",
+    hdrs = [
+        "//rtc_base/numerics:safe_conversions.h",
+        "//rtc_base/numerics:safe_conversions_impl.h",
+    ],
+    copts = COPTS,
+    deps = [":checks"],
+)
+
+cc_library(
+    name = "safe_minmax",
+    hdrs = ["//rtc_base/numerics:safe_minmax.h"],
+    copts = COPTS,
+    deps = [
+        ":checks",
+        ":safe_compare",
+        ":type_traits",
+    ],
+)
+
+cc_library(
+    name = "sanitizer",
+    hdrs = ["sanitizer.h"],
+    copts = COPTS,
+)
+
+cc_library(
+    name = "stringutils",
+    srcs = [
+        "string_encode.cc",
+        "string_to_number.cc",
+        "string_utils.cc",
+        "//rtc_base/strings:string_builder.cc",
+        "//rtc_base/strings:string_format.cc",
+    ],
+    hdrs = [
+        "string_encode.h",
+        "string_to_number.h",
+        "string_utils.h",
+        "//rtc_base/strings:str_join.h",
+        "//rtc_base/strings:string_builder.h",
+        "//rtc_base/strings:string_format.h",
+    ],
+    copts = COPTS,
+    deps = [
+        ":checks",
+        ":safe_minmax",
+        "//api:array_view",
+        "@com_google_absl//absl/base:core_headers",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:string_view",
+    ],
+)
+
+cc_library(
+    name = "swap_queue",
+    hdrs = ["swap_queue.h"],
+    copts = COPTS,
+    deps = [
+        ":checks",
+        "@com_google_absl//absl/base:core_headers",
+    ],
+)
+
+cc_library(
+    name = "timeutils",
+    srcs = [
+        "system_time.cc",
+        "time_utils.cc",
+    ],
+    hdrs = [
+        "system_time.h",
+        "time_utils.h",
+    ],
+    copts = COPTS,
+    deps = [
+        ":checks",
+        ":safe_conversions",
+        ":stringutils",
+        "//rtc_base/system:rtc_export",
+    ],
+)
+
+cc_library(
+    name = "type_traits",
+    hdrs = ["type_traits.h"],
+    copts = COPTS,
+)

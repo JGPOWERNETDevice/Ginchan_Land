@@ -1,0 +1,55 @@
+# Copyright 2023 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+load("//:defs.bzl", "COPTS")
+
+package(
+    default_visibility = ["//:__subpackages__"],
+)
+
+cc_library(
+    name = "aec_dump",
+    hdrs = ["aec_dump_factory.h"],
+    copts = COPTS,
+    deps = [
+        "//api/task_queue",
+        "//modules/audio_processing:aec_dump_interface",
+        "//rtc_base/system:file_wrapper",
+        "//rtc_base/system:rtc_export",
+        "@com_google_absl//absl/base:nullability",
+        "@com_google_absl//absl/strings:string_view",
+    ],
+)
+
+cc_library(
+    name = "aec_dump_impl",
+    srcs = [
+        "aec_dump_impl.cc",
+        "capture_stream_info.cc",
+    ],
+    hdrs = [
+        "aec_dump_impl.h",
+        "capture_stream_info.h",
+    ],
+    copts = COPTS,
+    deps = [
+        ":aec_dump",
+        "//api/audio:audio_frame_api",
+        "//api/audio:audio_processing",
+        "//api/task_queue",
+        "//modules/audio_processing:aec_dump_interface",
+        "//modules/audio_processing:audio_frame_view",
+        "//modules/audio_processing:audioproc_debug_proto",
+        "//rtc_base:checks",
+        "//rtc_base:logging",
+        "//rtc_base:macromagic",
+        "//rtc_base:protobuf_utils",
+        "//rtc_base:race_checker",
+        "//rtc_base:rtc_event",
+        "//rtc_base/system:file_wrapper",
+        "//system_wrappers",
+        "@com_google_absl//absl/base:nullability",
+        "@com_google_absl//absl/strings:string_view",
+    ],
+)

@@ -1,0 +1,32 @@
+# Copyright 2023 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+load("//:defs.bzl", "COPTS")
+
+package(
+    default_visibility = ["//:__subpackages__"],
+)
+
+cc_library(
+    name = "flat_containers_internal",
+    srcs = ["flat_tree.cc"],
+    hdrs = [
+        "flat_tree.h",
+        "invoke.h",
+        "move_only_int.h",
+    ],
+    copts = COPTS,
+    deps = [
+        "//rtc_base:checks",
+        "//rtc_base/system:no_unique_address",
+        "@com_google_absl//absl/algorithm:container",
+    ],
+)
+
+cc_library(
+    name = "flat_set",
+    hdrs = ["flat_set.h"],
+    copts = COPTS,
+    deps = [":flat_containers_internal"],
+)

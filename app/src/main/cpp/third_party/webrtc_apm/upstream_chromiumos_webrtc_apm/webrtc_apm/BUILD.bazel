@@ -1,0 +1,53 @@
+# Copyright 2023 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+load("@rules_cc//cc:defs.bzl", "cc_library", "cc_test")
+load("//:defs.bzl", "COPTS")
+
+cc_library(
+    name = "webrtc_apm",
+    srcs = [
+        "voice_activity_detector.cc",
+        "voice_activity_detector.h",
+        "webrtc_apm.cc",
+    ],
+    hdrs = [
+        "webrtc_apm.h",
+    ],
+    copts = COPTS,
+    data = ["@the_quick_brown_fox_wav//file"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//api/audio:aec3_factory",
+        "//api/audio:builtin_audio_processing_builder",
+        "//api/environment:environment_factory",
+        "//api/task_queue:default_task_queue_factory",
+        "//modules/audio_processing",
+        "//repositories:metrics_library",
+        "//webrtc_apm/cras_config",
+    ],
+)
+
+# TODO(b/268268938): Remove stub usage from stream_apm_unittest and remove this.
+cc_library(
+    name = "header_only_DO_NOT_USE",
+    testonly = True,
+    hdrs = ["webrtc_apm.h"],
+    visibility = ["@adhd//cras/src/tests:__pkg__"],
+)
+
+cc_test(
+    name = "webrtc_apm_test",
+    srcs = ["webrtc_apm_test.cc"],
+    copts = COPTS,
+    linkopts = ["-lm"],
+    deps = [
+        ":webrtc_apm",
+        "//modules/audio_processing:audioproc_debug_proto",
+        "//modules/audio_processing:audioproc_protobuf_utils",
+        "@pkg_config//gmock",
+        "@pkg_config//gtest",
+        "@pkg_config//gtest_main",
+    ],
+)

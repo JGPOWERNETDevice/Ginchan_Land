@@ -1,0 +1,46 @@
+# Copyright 2023 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+load("//:defs.bzl", "COPTS")
+
+package(
+    default_visibility = ["//:__subpackages__"],
+)
+
+cc_library(
+    name = "vad",
+    srcs = [
+        "gmm.cc",
+        "pitch_based_vad.cc",
+        "pitch_internal.cc",
+        "pole_zero_filter.cc",
+        "standalone_vad.cc",
+        "vad_audio_proc.cc",
+        "vad_circular_buffer.cc",
+        "voice_activity_detector.cc",
+    ],
+    hdrs = [
+        "common.h",
+        "gmm.h",
+        "noise_gmm_tables.h",
+        "pitch_based_vad.h",
+        "pitch_internal.h",
+        "pole_zero_filter.h",
+        "standalone_vad.h",
+        "vad_audio_proc.h",
+        "vad_audio_proc_internal.h",
+        "vad_circular_buffer.h",
+        "voice_activity_detector.h",
+        "voice_gmm_tables.h",
+    ],
+    copts = COPTS,
+    deps = [
+        "//audio/utility:audio_frame_operations",
+        "//common_audio",
+        "//common_audio:common_audio_c",
+        "//common_audio/third_party/ooura:fft_size_256",
+        "//modules/audio_coding:isac_vad",
+        "//rtc_base:checks",
+    ],
+)

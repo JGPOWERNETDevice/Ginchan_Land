@@ -1,0 +1,18 @@
+# Config for local builds
+# This file is ignored when building for ChromiumOS
+
+build --conlyopt=-std=gnu11
+build --cxxopt=-std=gnu++17
+build --copt=-Wall --copt=-Werror
+
+test --test_output=errors
+
+# Use system clang to build.
+build --action_env=CC=clang --action_env=CXX=clang++
+
+# Protobuf
+build --copt=-Wno-unused-function
+build --copt=-Wno-deprecated-non-prototype
+
+# b/316075428: Disable bzlmod for now, to avoid generating MODULE.bazel files.
+common --noexperimental_enable_bzlmod

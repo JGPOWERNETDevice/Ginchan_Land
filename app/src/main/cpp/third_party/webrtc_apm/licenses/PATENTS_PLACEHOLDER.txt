@@ -1,0 +1,4 @@
+Place the original WebRTC PATENTS / Additional IP Rights Grant notice here.
+
+Use the official WebRTC license page:
+https://webrtc.org/support/license

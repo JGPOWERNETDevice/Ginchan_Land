@@ -1,0 +1,238 @@
+# Copyright 2023 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+load("//:defs.bzl", "COPTS")
+
+package(
+    default_visibility = ["//:__subpackages__"],
+)
+
+cc_library(
+    name = "adaptive_digital_gain_controller",
+    srcs = ["adaptive_digital_gain_controller.cc"],
+    hdrs = ["adaptive_digital_gain_controller.h"],
+    copts = COPTS,
+    deps = [
+        ":common",
+        ":gain_applier",
+        "//api/audio:audio_frame_api",
+        "//api/audio:audio_processing",
+        "//common_audio",
+        "//modules/audio_processing:apm_logging",
+        "//rtc_base:checks",
+        "//rtc_base:logging",
+        "//rtc_base:safe_minmax",
+        "//system_wrappers:metrics",
+    ],
+)
+
+cc_library(
+    name = "biquad_filter",
+    srcs = ["biquad_filter.cc"],
+    hdrs = ["biquad_filter.h"],
+    copts = COPTS,
+    deps = [
+        "//api:array_view",
+        "//rtc_base:checks",
+    ],
+)
+
+cc_library(
+    name = "clipping_predictor",
+    srcs = [
+        "clipping_predictor.cc",
+        "clipping_predictor_level_buffer.cc",
+    ],
+    hdrs = [
+        "clipping_predictor.h",
+        "clipping_predictor_level_buffer.h",
+    ],
+    copts = COPTS,
+    deps = [
+        ":gain_map",
+        "//api/audio:audio_processing",
+        "//common_audio",
+        "//modules/audio_processing:audio_frame_view",
+        "//rtc_base:checks",
+        "//rtc_base:logging",
+        "//rtc_base:safe_minmax",
+    ],
+)
+
+cc_library(
+    name = "common",
+    hdrs = ["agc2_common.h"],
+    copts = COPTS,
+)
+
+cc_library(
+    name = "cpu_features",
+    srcs = ["cpu_features.cc"],
+    hdrs = ["cpu_features.h"],
+    copts = COPTS,
+    deps = [
+        "//rtc_base:cpu_info",
+        "//rtc_base:stringutils",
+        "//rtc_base/system:arch",
+    ],
+)
+
+cc_library(
+    name = "fixed_digital",
+    srcs = [
+        "fixed_digital_level_estimator.cc",
+        "interpolated_gain_curve.cc",
+        "limiter.cc",
+    ],
+    hdrs = [
+        "fixed_digital_level_estimator.h",
+        "interpolated_gain_curve.h",
+        "limiter.h",
+    ],
+    copts = COPTS,
+    deps = [
+        ":common",
+        "//api:array_view",
+        "//api/audio:audio_frame_api",
+        "//common_audio",
+        "//modules/audio_processing:apm_logging",
+        "//modules/audio_processing:audio_frame_view",
+        "//rtc_base:checks",
+        "//rtc_base:gtest_prod",
+        "//rtc_base:safe_conversions",
+        "//rtc_base:safe_minmax",
+        "//rtc_base:stringutils",
+        "//system_wrappers:metrics",
+        "@com_google_absl//absl/strings:string_view",
+    ],
+)
+
+cc_library(
+    name = "gain_applier",
+    srcs = ["gain_applier.cc"],
+    hdrs = ["gain_applier.h"],
+    copts = COPTS,
+    deps = [
+        ":common",
+        "//api/audio:audio_frame_api",
+        "//modules/audio_processing:audio_frame_view",
+        "//rtc_base:checks",
+        "//rtc_base:safe_minmax",
+    ],
+)
+
+cc_library(
+    name = "gain_map",
+    hdrs = ["gain_map_internal.h"],
+    copts = COPTS,
+)
+
+cc_library(
+    name = "input_volume_controller",
+    srcs = [
+        "input_volume_controller.cc",
+        "speech_probability_buffer.cc",
+    ],
+    hdrs = [
+        "input_volume_controller.h",
+        "speech_probability_buffer.h",
+    ],
+    copts = COPTS,
+    deps = [
+        ":clipping_predictor",
+        ":gain_map",
+        ":input_volume_stats_reporter",
+        "//api:array_view",
+        "//api/audio:audio_processing",
+        "//modules/audio_processing:audio_buffer",
+        "//modules/audio_processing:audio_frame_view",
+        "//rtc_base:checks",
+        "//rtc_base:gtest_prod",
+        "//rtc_base:logging",
+        "//rtc_base:safe_minmax",
+        "//system_wrappers:metrics",
+    ],
+)
+
+cc_library(
+    name = "input_volume_stats_reporter",
+    srcs = ["input_volume_stats_reporter.cc"],
+    hdrs = ["input_volume_stats_reporter.h"],
+    copts = COPTS,
+    deps = [
+        "//rtc_base:checks",
+        "//rtc_base:gtest_prod",
+        "//rtc_base:logging",
+        "//rtc_base:safe_minmax",
+        "//rtc_base:stringutils",
+        "//system_wrappers:metrics",
+        "@com_google_absl//absl/strings:string_view",
+    ],
+)
+
+cc_library(
+    name = "noise_level_estimator",
+    srcs = ["noise_level_estimator.cc"],
+    hdrs = ["noise_level_estimator.h"],
+    copts = COPTS,
+    deps = [
+        ":biquad_filter",
+        "//api/audio:audio_frame_api",
+        "//modules/audio_processing:apm_logging",
+        "//rtc_base:checks",
+        "//system_wrappers",
+    ],
+)
+
+cc_library(
+    name = "saturation_protector",
+    srcs = [
+        "saturation_protector.cc",
+        "saturation_protector_buffer.cc",
+    ],
+    hdrs = [
+        "saturation_protector.h",
+        "saturation_protector_buffer.h",
+    ],
+    copts = COPTS,
+    deps = [
+        ":common",
+        "//modules/audio_processing:apm_logging",
+        "//rtc_base:checks",
+        "//rtc_base:safe_compare",
+        "//rtc_base:safe_minmax",
+    ],
+)
+
+cc_library(
+    name = "speech_level_estimator",
+    srcs = ["speech_level_estimator.cc"],
+    hdrs = ["speech_level_estimator.h"],
+    copts = COPTS,
+    deps = [
+        ":common",
+        "//api:array_view",
+        "//api/audio:audio_processing",
+        "//modules/audio_processing:apm_logging",
+        "//rtc_base:checks",
+        "//rtc_base:logging",
+        "//rtc_base:safe_minmax",
+    ],
+)
+
+cc_library(
+    name = "vad_wrapper",
+    srcs = ["vad_wrapper.cc"],
+    hdrs = ["vad_wrapper.h"],
+    copts = COPTS,
+    deps = [
+        ":common",
+        ":cpu_features",
+        "//api/audio:audio_frame_api",
+        "//common_audio",
+        "//modules/audio_processing/agc2/rnn_vad",
+        "//modules/audio_processing/agc2/rnn_vad:rnn_vad_common",
+        "//rtc_base:checks",
+    ],
+)

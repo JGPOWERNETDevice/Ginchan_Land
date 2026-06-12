@@ -1,0 +1,42 @@
+# Copyright 2023 The ChromiumOS Authors
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+load("//:defs.bzl", "COPTS")
+
+package(
+    default_visibility = ["//:__subpackages__"],
+)
+
+cc_library(
+    name = "isac_bwinfo",
+    hdrs = ["codecs/isac/bandwidth_info.h"],
+    copts = COPTS,
+)
+
+cc_library(
+    name = "isac_vad",
+    srcs = [
+        "codecs/isac/main/source/filter_functions.c",
+        "codecs/isac/main/source/isac_vad.c",
+        "codecs/isac/main/source/pitch_estimator.c",
+        "codecs/isac/main/source/pitch_filter.c",
+    ],
+    hdrs = [
+        "codecs/isac/main/source/filter_functions.h",
+        "codecs/isac/main/source/isac_vad.h",
+        "codecs/isac/main/source/os_specific_inline.h",
+        "codecs/isac/main/source/pitch_estimator.h",
+        "codecs/isac/main/source/pitch_filter.h",
+        "codecs/isac/main/source/settings.h",
+        "codecs/isac/main/source/structs.h",
+    ],
+    copts = COPTS,
+    deps = [
+        ":isac_bwinfo",
+        "//modules/third_party/fft",
+        "//rtc_base:compile_assert_c",
+        "//rtc_base/system:arch",
+        "//rtc_base/system:ignore_warnings",
+    ],
+)
