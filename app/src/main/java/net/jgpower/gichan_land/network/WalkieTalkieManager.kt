@@ -29,10 +29,7 @@ object WalkieTalkieManager {
 
     private const val TAG = "WALKIE"
 
-    private const val APP_AUDIO_PORT = 60000
-    private const val MONITOR_AUDIO_PORT = 60001
-    private const val MONITOR_WORKER_ID = "monitor"
-
+    private const val UDP_PORT = 51515
     private const val CHANNEL_ID = 1
 
     private const val MAGIC_1 = 0xAA.toByte()
@@ -124,7 +121,7 @@ object WalkieTalkieManager {
         val newSocket = DatagramSocket(null).apply {
             reuseAddress = true
             broadcast = true
-            bind(InetSocketAddress(APP_AUDIO_PORT))
+            bind(InetSocketAddress(UDP_PORT))
         }
 
         socket = newSocket
@@ -133,7 +130,7 @@ object WalkieTalkieManager {
 
         Log.d(
             TAG,
-            "started workerId=$workerId areaGroup=$areaGroup appPort=$APP_AUDIO_PORT monitorPort=$MONITOR_AUDIO_PORT sampleRate=$SAMPLE_RATE frameBytes=$FRAME_BYTES"
+            "started workerId=$workerId areaGroup=$areaGroup sampleRate=$SAMPLE_RATE frameBytes=$FRAME_BYTES"
         )
     }
 
@@ -383,65 +380,17 @@ object WalkieTalkieManager {
             val address = broadcastAddress
                 ?: InetAddress.getByName("255.255.255.255")
 
-            val sendToAppUsers = shouldSendToAppUsers(target)
-            val sendToMonitor = shouldSendToMonitor(target)
+            val packet = DatagramPacket(
+                packetBytes,
+                packetBytes.size,
+                address,
+                UDP_PORT
+            )
 
-            if (sendToAppUsers) {
-                val appPacket = DatagramPacket(
-                    packetBytes,
-                    packetBytes.size,
-                    address,
-                    APP_AUDIO_PORT
-                )
-
-                socket.send(appPacket)
-
-                Log.d(TAG, "sent audio to app port=$APP_AUDIO_PORT target=$target")
-            }
-
-            if (sendToMonitor) {
-                val monitorPacket = DatagramPacket(
-                    packetBytes,
-                    packetBytes.size,
-                    address,
-                    MONITOR_AUDIO_PORT
-                )
-
-                socket.send(monitorPacket)
-
-                Log.d(TAG, "sent audio to monitor port=$MONITOR_AUDIO_PORT target=$target")
-            }
+            socket.send(packet)
         } catch (e: Exception) {
             Log.e(TAG, "send failed", e)
         }
-    }
-
-    private fun shouldSendToAppUsers(target: WalkieTarget): Boolean {
-        if (target.targetType != WalkieTargetType.USER) {
-            return true
-        }
-
-        val selectedWorkerIds = parseTargetWorkerIds(target.targetWorkerId)
-
-        return selectedWorkerIds.any { it != MONITOR_WORKER_ID }
-    }
-
-    private fun shouldSendToMonitor(target: WalkieTarget): Boolean {
-        if (target.targetType != WalkieTargetType.USER) {
-            return false
-        }
-
-        val selectedWorkerIds = parseTargetWorkerIds(target.targetWorkerId)
-
-        return selectedWorkerIds.contains(MONITOR_WORKER_ID)
-    }
-
-    private fun parseTargetWorkerIds(targetWorkerId: String?): List<String> {
-        return targetWorkerId
-            ?.split(",")
-            ?.map { it.trim() }
-            ?.filter { it.isNotBlank() }
-            ?: emptyList()
     }
 
     private fun buildPacket(
@@ -525,7 +474,7 @@ object WalkieTalkieManager {
         thread(name = "walkie-receiver") {
             val buffer = ByteArray(2048)
 
-            Log.d(TAG, "receiver started port=$APP_AUDIO_PORT")
+            Log.d(TAG, "receiver started")
 
             while (isReceiverRunning) {
                 try {
@@ -565,7 +514,11 @@ object WalkieTalkieManager {
 
             val isForMe = when (packet.targetType) {
                 WalkieTargetType.USER -> {
-                    parseTargetWorkerIds(packet.targetWorkerId).contains(myWorkerId)
+                    packet.targetWorkerId
+                        .split(",")
+                        .map { it.trim() }
+                        .filter { it.isNotBlank() }
+                        .contains(myWorkerId)
                 }
 
                 WalkieTargetType.GROUP -> {
