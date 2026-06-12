@@ -29,7 +29,7 @@ object WalkieTalkieManager {
 
     private const val TAG = "WALKIE"
 
-    private const val UDP_PORT = 51515
+    private const val UDP_PORT = 60000
     private const val CHANNEL_ID = 1
 
     private const val MAGIC_1 = 0xAA.toByte()

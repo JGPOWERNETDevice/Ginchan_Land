@@ -56,6 +56,8 @@ import net.jgpower.gichan_land.data.walkie.WalkieTargetType
 import net.jgpower.gichan_land.network.ApiServiceManager
 import net.jgpower.gichan_land.network.WalkieTalkieManager
 
+private const val MONITOR_WORKER_ID = "monitor"
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun WalkieTalkieScreen(
@@ -64,6 +66,7 @@ fun WalkieTalkieScreen(
 ) {
     val context = LocalContext.current
     val scrollState = rememberScrollState()
+    val currentWorkerId = workerId.trim()
 
     val onlineWorkers = remember { mutableStateListOf<OnlineWorkerDto>() }
 
@@ -81,8 +84,13 @@ fun WalkieTalkieScreen(
     var isMicOn by remember { mutableStateOf(false) }
 
     fun workerDisplayName(worker: OnlineWorkerDto): String {
-        val name = worker.name
-        val id = worker.workerId
+        val id = worker.workerId?.trim()
+
+        if (id == MONITOR_WORKER_ID) {
+            return "중앙관제"
+        }
+
+        val name = worker.name?.trim()
 
         return when {
             !name.isNullOrBlank() -> name
@@ -92,7 +100,7 @@ fun WalkieTalkieScreen(
     }
 
     fun workerDisplayId(worker: OnlineWorkerDto): String {
-        return worker.workerId?.takeIf { it.isNotBlank() } ?: "-"
+        return worker.workerId?.trim()?.takeIf { it.isNotBlank() } ?: "-"
     }
 
     fun updateWalkieTarget() {
@@ -144,6 +152,7 @@ fun WalkieTalkieScreen(
         val targetWorkerId = worker.workerId?.trim() ?: return
 
         if (targetWorkerId.isBlank()) return
+        if (targetWorkerId == currentWorkerId) return
 
         isGroupSelected = false
 
@@ -193,10 +202,10 @@ fun WalkieTalkieScreen(
             onlineWorkers.addAll(list)
 
             val me = list.firstOrNull {
-                it.workerId?.trim() == workerId
+                it.workerId?.trim() == currentWorkerId
             }
 
-            myAreaGroup = me?.areaGroup
+            myAreaGroup = me?.areaGroup?.trim()
 
             if (selectedTarget == null && !myAreaGroup.isNullOrBlank()) {
                 isGroupSelected = true
@@ -217,13 +226,13 @@ fun WalkieTalkieScreen(
         }
     }
 
-    LaunchedEffect(workerId, myAreaGroup) {
+    LaunchedEffect(currentWorkerId, myAreaGroup) {
         val group = myAreaGroup
 
         if (!group.isNullOrBlank()) {
             WalkieTalkieManager.start(
                 context = context,
-                workerId = workerId,
+                workerId = currentWorkerId,
                 areaGroup = group
             )
         }
@@ -236,13 +245,19 @@ fun WalkieTalkieScreen(
     }
 
     val groupWorkers = onlineWorkers.filter { worker ->
-        val otherWorkerId = worker.workerId?.trim()
-        val otherAreaGroup = worker.areaGroup
+        val targetWorkerId = worker.workerId?.trim()
+        val workerAreaGroup = worker.areaGroup?.trim()
+        val myGroup = myAreaGroup?.trim()
 
-        !otherWorkerId.isNullOrBlank() &&
-                otherWorkerId != workerId &&
-                !otherAreaGroup.isNullOrBlank() &&
-                otherAreaGroup == myAreaGroup
+        val isMonitor = targetWorkerId == MONITOR_WORKER_ID
+
+        isMonitor ||
+                (
+                        !targetWorkerId.isNullOrBlank() &&
+                                targetWorkerId != currentWorkerId &&
+                                !myGroup.isNullOrBlank() &&
+                                workerAreaGroup == myGroup
+                        )
     }
 
     Scaffold(
