@@ -2,7 +2,6 @@ package net.jgpower.gichan_land.ui.walkietalkie
 
 import android.Manifest
 import android.content.pm.PackageManager
-import android.os.Build
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -58,6 +57,8 @@ import net.jgpower.gichan_land.network.ApiServiceManager
 import net.jgpower.gichan_land.network.WalkieTalkieManager
 
 private const val MONITOR_WORKER_ID = "monitor"
+private const val MONITOR_NAME = "중앙관제"
+private const val MONITOR_GROUP = "중앙관제"
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -84,41 +85,11 @@ fun WalkieTalkieScreen(
     var selectedTarget by remember { mutableStateOf<WalkieTarget?>(null) }
     var isMicOn by remember { mutableStateOf(false) }
 
-    fun hasRecordAudioPermission(): Boolean {
-        return ContextCompat.checkSelfPermission(
-            context,
-            Manifest.permission.RECORD_AUDIO
-        ) == PackageManager.PERMISSION_GRANTED
-    }
-
-    fun hasBluetoothConnectPermission(): Boolean {
-        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            ContextCompat.checkSelfPermission(
-                context,
-                Manifest.permission.BLUETOOTH_CONNECT
-            ) == PackageManager.PERMISSION_GRANTED
-        } else {
-            true
-        }
-    }
-
-    fun requiredWalkiePermissions(): Array<String> {
-        val permissions = mutableListOf(
-            Manifest.permission.RECORD_AUDIO
-        )
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            permissions.add(Manifest.permission.BLUETOOTH_CONNECT)
-        }
-
-        return permissions.toTypedArray()
-    }
-
     fun workerDisplayName(worker: OnlineWorkerDto): String {
         val id = worker.workerId?.trim()
 
         if (id == MONITOR_WORKER_ID) {
-            return "중앙관제"
+            return MONITOR_NAME
         }
 
         val name = worker.name?.trim()
@@ -132,6 +103,14 @@ fun WalkieTalkieScreen(
 
     fun workerDisplayId(worker: OnlineWorkerDto): String {
         return worker.workerId?.trim()?.takeIf { it.isNotBlank() } ?: "-"
+    }
+
+    fun isMonitorSelected(): Boolean {
+        return selectedTarget?.targetType == WalkieTargetType.USER &&
+                selectedTarget?.targetWorkerId
+                    ?.split(",")
+                    ?.map { it.trim() }
+                    ?.contains(MONITOR_WORKER_ID) == true
     }
 
     fun updateWalkieTarget() {
@@ -162,21 +141,30 @@ fun WalkieTalkieScreen(
         WalkieTalkieManager.setTarget(selectedTarget)
     }
 
-    fun selectedTargetText(): String {
-        return if (isGroupSelected) {
-            "현재 송신 대상: 그룹 전체"
-        } else {
-            val names = selectedWorkerIds.values
-                .joinToString(", ") { workerDisplayName(it) }
-
-            "현재 송신 대상: ${names.ifBlank { "선택 없음" }}"
-        }
-    }
-
     fun selectGroupAll() {
         isGroupSelected = true
         selectedWorkerIds.clear()
-        updateWalkieTarget()
+
+        selectedTarget = WalkieTarget(
+            targetType = WalkieTargetType.GROUP,
+            targetAreaGroup = myAreaGroup
+        )
+
+        WalkieTalkieManager.setTarget(selectedTarget)
+    }
+
+    fun selectMonitor() {
+        isGroupSelected = false
+        selectedWorkerIds.clear()
+
+        selectedTarget = WalkieTarget(
+            targetType = WalkieTargetType.USER,
+            targetWorkerId = MONITOR_WORKER_ID,
+            targetWorkerName = MONITOR_NAME,
+            targetAreaGroup = MONITOR_GROUP
+        )
+
+        WalkieTalkieManager.setTarget(selectedTarget)
     }
 
     fun toggleWorker(worker: OnlineWorkerDto) {
@@ -184,6 +172,7 @@ fun WalkieTalkieScreen(
 
         if (targetWorkerId.isBlank()) return
         if (targetWorkerId == currentWorkerId) return
+        if (targetWorkerId == MONITOR_WORKER_ID) return
 
         isGroupSelected = false
 
@@ -194,6 +183,21 @@ fun WalkieTalkieScreen(
         }
 
         updateWalkieTarget()
+    }
+
+    fun selectedTargetText(): String {
+        if (isMonitorSelected()) {
+            return "현재 송신 대상: $MONITOR_NAME"
+        }
+
+        return if (isGroupSelected) {
+            "현재 송신 대상: 그룹 전체"
+        } else {
+            val names = selectedWorkerIds.values
+                .joinToString(", ") { workerDisplayName(it) }
+
+            "현재 송신 대상: ${names.ifBlank { "선택 없음" }}"
+        }
     }
 
     fun exitScreen() {
@@ -208,7 +212,13 @@ fun WalkieTalkieScreen(
             return
         }
 
-        if (!hasRecordAudioPermission() || !hasBluetoothConnectPermission()) {
+        val granted =
+            ContextCompat.checkSelfPermission(
+                context,
+                Manifest.permission.RECORD_AUDIO
+            ) == PackageManager.PERMISSION_GRANTED
+
+        if (!granted) {
             errorMessage = null
             return
         }
@@ -225,31 +235,14 @@ fun WalkieTalkieScreen(
         exitScreen()
     }
 
-    val permissionLauncher =
+    val micPermissionLauncher =
         rememberLauncherForActivityResult(
-            ActivityResultContracts.RequestMultiplePermissions()
-        ) { result ->
-            val micGranted =
-                result[Manifest.permission.RECORD_AUDIO] == true ||
-                        hasRecordAudioPermission()
-
-            val bluetoothGranted =
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                    result[Manifest.permission.BLUETOOTH_CONNECT] == true ||
-                            hasBluetoothConnectPermission()
-                } else {
-                    true
-                }
-
-            if (micGranted && bluetoothGranted) {
+            ActivityResultContracts.RequestPermission()
+        ) { granted ->
+            if (granted) {
                 startMicIfPossible()
             } else {
-                errorMessage =
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                        "마이크 및 블루투스 권한이 필요합니다."
-                    } else {
-                        "마이크 권한이 필요합니다."
-                    }
+                errorMessage = "마이크 권한이 필요합니다."
             }
         }
 
@@ -270,9 +263,7 @@ fun WalkieTalkieScreen(
             myAreaGroup = me?.areaGroup?.trim()
 
             if (selectedTarget == null && !myAreaGroup.isNullOrBlank()) {
-                isGroupSelected = true
-                selectedWorkerIds.clear()
-                updateWalkieTarget()
+                selectGroupAll()
             }
         } catch (e: Exception) {
             errorMessage = "온라인 직원 목록 조회 실패: ${e.message}"
@@ -307,20 +298,20 @@ fun WalkieTalkieScreen(
     }
 
     val groupWorkers = onlineWorkers.filter { worker ->
-        val targetWorkerId = worker.workerId?.trim()
-        val workerAreaGroup = worker.areaGroup?.trim()
+        val otherWorkerId = worker.workerId?.trim()
+        val otherAreaGroup = worker.areaGroup?.trim()
         val myGroup = myAreaGroup?.trim()
 
-        val isMonitor = targetWorkerId == MONITOR_WORKER_ID
-
-        isMonitor ||
-                (
-                        !targetWorkerId.isNullOrBlank() &&
-                                targetWorkerId != currentWorkerId &&
-                                !myGroup.isNullOrBlank() &&
-                                workerAreaGroup == myGroup
-                        )
+        !otherWorkerId.isNullOrBlank() &&
+                otherWorkerId != currentWorkerId &&
+                otherWorkerId != MONITOR_WORKER_ID &&
+                !otherAreaGroup.isNullOrBlank() &&
+                !myGroup.isNullOrBlank() &&
+                otherAreaGroup == myGroup
     }
+
+    val hasMonitorInOnlineWorkers =
+        onlineWorkers.any { it.workerId?.trim() == MONITOR_WORKER_ID }
 
     Scaffold(
         topBar = {
@@ -391,6 +382,25 @@ fun WalkieTalkieScreen(
                         enabled = !myAreaGroup.isNullOrBlank()
                     )
 
+                    FilterChip(
+                        selected = isMonitorSelected(),
+                        onClick = {
+                            selectMonitor()
+                        },
+                        label = {
+                            Text(MONITOR_NAME)
+                        },
+                        enabled = hasMonitorInOnlineWorkers
+                    )
+
+                    if (!hasMonitorInOnlineWorkers) {
+                        Text(
+                            text = "중앙관제 연결 정보가 없습니다.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error
+                        )
+                    }
+
                     Text(
                         text = "개별 직원 선택",
                         fontWeight = FontWeight.Bold
@@ -449,10 +459,18 @@ fun WalkieTalkieScreen(
                                 return@Button
                             }
 
-                            if (hasRecordAudioPermission() && hasBluetoothConnectPermission()) {
+                            val granted =
+                                ContextCompat.checkSelfPermission(
+                                    context,
+                                    Manifest.permission.RECORD_AUDIO
+                                ) == PackageManager.PERMISSION_GRANTED
+
+                            if (granted) {
                                 startMicIfPossible()
                             } else {
-                                permissionLauncher.launch(requiredWalkiePermissions())
+                                micPermissionLauncher.launch(
+                                    Manifest.permission.RECORD_AUDIO
+                                )
                             }
                         }
                     },
