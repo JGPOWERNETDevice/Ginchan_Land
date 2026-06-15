@@ -79,6 +79,7 @@ dependencies {
     testImplementation(libs.junit)
 
     implementation("io.github.jaredmdobson:concentus:1.0.2")
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
 
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
