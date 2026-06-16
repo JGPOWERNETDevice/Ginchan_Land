@@ -157,6 +157,16 @@ target_compile_options(
         -Wno-missing-field-initializers
 )
 
+# Android 15+/16KB page-size compatibility.
+# Keep this even when using NDK r27 or lower; NDK r28+ uses compatible
+# alignment by default, but these flags make the JNI .so explicit.
+target_link_options(
+        webrtc_apm_jni
+        PRIVATE
+        "-Wl,-z,max-page-size=16384"
+        "-Wl,-z,common-page-size=16384"
+)
+
 target_link_libraries(
         webrtc_apm_jni
         webrtc_apm_core

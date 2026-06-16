@@ -309,7 +309,7 @@ fun MainScreen(
                     },
                     modifier = Modifier
                         .height(36.dp)
-                        .alpha(if (isSelected) 1f else 0.35f)
+                        .alpha(if (isSelected) 1f else 0.75f)
                 ) {
                     Text(
                         text = status,
