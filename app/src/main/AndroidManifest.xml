@@ -51,6 +51,10 @@
             android:exported="false"
             android:foregroundServiceType="dataSync" />
 
+        <receiver
+            android:name=".service.WalkieIncomingCallActionReceiver"
+            android:exported="false" />
+
     </application>
 
 </manifest>

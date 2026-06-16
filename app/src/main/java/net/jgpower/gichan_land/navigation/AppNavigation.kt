@@ -30,6 +30,7 @@ import net.jgpower.gichan_land.ui.main.MainScreen
 import net.jgpower.gichan_land.ui.notice.NoticeScreen
 import net.jgpower.gichan_land.ui.signin.SignInScreen
 import net.jgpower.gichan_land.ui.walkietalkie.WalkieTalkieScreen
+import net.jgpower.gichan_land.ui.walkietalkie.WalkieIncomingCallPopupHost
 import kotlinx.coroutines.delay
 import net.jgpower.gichan_land.network.WalkieTalkieManager
 
@@ -47,7 +48,9 @@ object Routes {
 fun AppNavigation(
     startAlertId: String? = null,
     startWorkerId: String? = null,
-    onStartAlertConsumed: () -> Unit = {}
+    startWalkie: Boolean = false,
+    onStartAlertConsumed: () -> Unit = {},
+    onStartWalkieConsumed: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val appContext = context.applicationContext
@@ -205,6 +208,13 @@ fun AppNavigation(
         }
     }
 
+    LaunchedEffect(startWalkie, loginWorkerId.value) {
+        if (startWalkie && loginWorkerId.value.isNotBlank()) {
+            currentRoute.value = Routes.WALKIE_TALKIE
+            onStartWalkieConsumed()
+        }
+    }
+
     if (isCheckingLogin.value) {
         androidx.compose.material3.Text("로그인 상태 확인 중...")
         return
@@ -338,5 +348,13 @@ fun AppNavigation(
         currentRoute.value != Routes.SIGN_IN
     ) {
         AppAlertPopupHost()
+
+        WalkieIncomingCallPopupHost(
+            workerId = loginWorkerId.value,
+            enabled = currentRoute.value != Routes.WALKIE_TALKIE,
+            onOpenWalkie = {
+                currentRoute.value = Routes.WALKIE_TALKIE
+            }
+        )
     }
 }

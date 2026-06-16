@@ -27,6 +27,19 @@ object WalkieSignalingClient {
     private var currentWorkerId: String? = null
 
     var listener: Listener? = null
+    private var backgroundListener: Listener? = null
+
+    fun setBackgroundListener(listener: Listener?) {
+        backgroundListener = listener
+    }
+
+    private fun notifyListeners(block: (Listener) -> Unit) {
+        listener?.let(block)
+        val bg = backgroundListener
+        if (bg != null && bg !== listener) {
+            block(bg)
+        }
+    }
 
     data class MissedCallDto(
         val missedId: String,
@@ -61,7 +74,8 @@ object WalkieSignalingClient {
         )
 
         fun onCallRejected(callId: String, byWorkerId: String?)
-        fun onCallEnded(callId: String, reason: String?)
+        fun onCallFailed(callId: String, reason: String?, peerWorkerId: String?) {}
+        fun onCallEnded(callId: String, reason: String?, byWorkerId: String?, peerWorkerId: String?)
         fun onMicState(callId: String, workerId: String, micOn: Boolean)
         fun onMissedCallsList(items: List<MissedCallDto>) {}
         fun onMissedCallAdded(item: MissedCallDto) {}
@@ -101,7 +115,7 @@ object WalkieSignalingClient {
                     )
 
                     post {
-                        listener?.onConnected()
+                        notifyListeners { it.onConnected() }
                     }
                 }
 
@@ -111,19 +125,19 @@ object WalkieSignalingClient {
 
                 override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
                     Log.d(TAG, "closed code=$code reason=$reason")
-                    post { listener?.onDisconnected() }
+                    post { notifyListeners { it.onDisconnected() } }
                 }
 
                 override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
                     Log.d(TAG, "closing code=$code reason=$reason")
-                    post { listener?.onDisconnected() }
+                    post { notifyListeners { it.onDisconnected() } }
                 }
 
                 override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
                     Log.e(TAG, "failed", t)
                     post {
-                        listener?.onError(t.message ?: "WebSocket error")
-                        listener?.onDisconnected()
+                        notifyListeners { it.onError(t.message ?: "WebSocket error") }
+                        notifyListeners { it.onDisconnected() }
                     }
                 }
             }
@@ -299,79 +313,110 @@ object WalkieSignalingClient {
 
             post {
                 when (type) {
-                    "connect_ok" -> listener?.onConnected()
+                    "connect_ok" -> notifyListeners { it.onConnected() }
                     "pong" -> Unit
 
                     "call_ringing" -> {
-                        listener?.onCallRinging(
-                            callId = json.optString("callId"),
-                            toWorkerId = json.optString("toWorkerId")
-                        )
+                        notifyListeners {
+                            it.onCallRinging(
+                                callId = json.optString("callId"),
+                                toWorkerId = json.optString("toWorkerId")
+                            )
+                        }
                     }
 
                     "incoming_call" -> {
-                        listener?.onIncomingCall(
-                            callId = json.optString("callId"),
-                            fromWorkerId = json.optString("fromWorkerId"),
-                            fromName = json.optString("fromName").takeIf { it.isNotBlank() },
-                            fromAreaGroup = json.optString("fromAreaGroup").takeIf { it.isNotBlank() }
-                        )
+                        notifyListeners {
+                            it.onIncomingCall(
+                                callId = json.optString("callId"),
+                                fromWorkerId = json.optString("fromWorkerId"),
+                                fromName = json.optString("fromName").takeIf { value -> value.isNotBlank() },
+                                fromAreaGroup = json.optString("fromAreaGroup").takeIf { value -> value.isNotBlank() }
+                            )
+                        }
                     }
 
                     "call_active" -> {
-                        listener?.onCallActive(
-                            callId = json.optString("callId"),
-                            peerWorkerId = json.optString("peerWorkerId"),
-                            talkerId = json.optString("talkerId")
-                                .takeIf { it.isNotBlank() && it != "null" }
-                        )
+                        notifyListeners {
+                            it.onCallActive(
+                                callId = json.optString("callId"),
+                                peerWorkerId = json.optString("peerWorkerId"),
+                                talkerId = json.optString("talkerId")
+                                    .takeIf { value -> value.isNotBlank() && value != "null" }
+                            )
+                        }
                     }
 
                     "call_rejected" -> {
-                        listener?.onCallRejected(
-                            callId = json.optString("callId"),
-                            byWorkerId = json.optString("byWorkerId")
-                                .takeIf { it.isNotBlank() && it != "null" }
-                        )
+                        notifyListeners {
+                            it.onCallRejected(
+                                callId = json.optString("callId"),
+                                byWorkerId = json.optString("byWorkerId")
+                                    .takeIf { value -> value.isNotBlank() && value != "null" }
+                            )
+                        }
+                    }
+
+                    "call_failed" -> {
+                        notifyListeners {
+                            it.onCallFailed(
+                                callId = json.optString("callId"),
+                                reason = json.optString("reason").takeIf { value -> value.isNotBlank() },
+                                peerWorkerId = json.optString("peerWorkerId")
+                                    .takeIf { value -> value.isNotBlank() && value != "null" }
+                            )
+                        }
                     }
 
                     "call_ended" -> {
-                        listener?.onCallEnded(
-                            callId = json.optString("callId"),
-                            reason = json.optString("reason").takeIf { it.isNotBlank() }
-                        )
+                        notifyListeners {
+                            it.onCallEnded(
+                                callId = json.optString("callId"),
+                                reason = json.optString("reason").takeIf { value -> value.isNotBlank() },
+                                byWorkerId = json.optString("byWorkerId")
+                                    .takeIf { value -> value.isNotBlank() && value != "null" },
+                                peerWorkerId = json.optString("peerWorkerId")
+                                    .takeIf { value -> value.isNotBlank() && value != "null" }
+                            )
+                        }
                     }
 
                     "mic_state" -> {
-                        listener?.onMicState(
-                            callId = json.optString("callId"),
-                            workerId = json.optString("workerId"),
-                            micOn = json.optBoolean("micOn", false)
-                        )
+                        notifyListeners {
+                            it.onMicState(
+                                callId = json.optString("callId"),
+                                workerId = json.optString("workerId"),
+                                micOn = json.optBoolean("micOn", false)
+                            )
+                        }
                     }
 
                     "missed_calls_list" -> {
-                        listener?.onMissedCallsList(parseMissedCallArray(json.optJSONArray("items")))
+                        notifyListeners {
+                            it.onMissedCallsList(parseMissedCallArray(json.optJSONArray("items")))
+                        }
                     }
 
                     "missed_call_added" -> {
                         json.optJSONObject("item")?.let { item ->
-                            listener?.onMissedCallAdded(parseMissedCall(item))
+                            notifyListeners {
+                                it.onMissedCallAdded(parseMissedCall(item))
+                            }
                         }
                     }
 
                     "talk_granted" -> Unit
 
                     "talk_denied" -> {
-                        listener?.onError(
-                            json.optString("reason").ifBlank { "talk_denied" }
-                        )
+                        notifyListeners {
+                            it.onError(json.optString("reason").ifBlank { "talk_denied" })
+                        }
                     }
 
                     "call_request_failed" -> {
-                        listener?.onError(
-                            json.optString("reason").ifBlank { "call_request_failed" }
-                        )
+                        notifyListeners {
+                            it.onError(json.optString("reason").ifBlank { "call_request_failed" })
+                        }
                     }
 
                     else -> Log.d(TAG, "unknown type=$type")
@@ -379,7 +424,7 @@ object WalkieSignalingClient {
             }
         } catch (e: Exception) {
             Log.e(TAG, "handle message failed", e)
-            post { listener?.onError(e.message ?: "message parse error") }
+            post { notifyListeners { it.onError(e.message ?: "message parse error") } }
         }
     }
 

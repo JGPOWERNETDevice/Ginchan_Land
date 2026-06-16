@@ -21,6 +21,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -42,7 +43,6 @@ import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -55,24 +55,19 @@ import kotlinx.coroutines.delay
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import net.jgpower.gichan_land.data.walkie.IncomingWalkieCallState
 import net.jgpower.gichan_land.data.walkie.OnlineWorkerDto
+import net.jgpower.gichan_land.data.walkie.WalkieGlobalState
+import net.jgpower.gichan_land.data.walkie.WalkieMissedCallState
 import net.jgpower.gichan_land.data.walkie.WalkieTarget
 import net.jgpower.gichan_land.data.walkie.WalkieTargetType
 import net.jgpower.gichan_land.network.ApiServiceManager
-import net.jgpower.gichan_land.network.ServerConfig
 import net.jgpower.gichan_land.network.WalkieSignalingClient
 import net.jgpower.gichan_land.network.WalkieTalkieManager
 
 private const val MONITOR_WORKER_ID = "monitor"
 private const val MONITOR_NAME = "중앙관제"
 private const val MONITOR_GROUP = "중앙관제"
-
-private data class IncomingCallUiState(
-    val callId: String,
-    val fromWorkerId: String,
-    val fromName: String?,
-    val fromAreaGroup: String?
-)
 
 private data class MissedCallUiState(
     val missedId: String,
@@ -107,16 +102,16 @@ fun WalkieTalkieScreen(
     var selectedTarget by remember { mutableStateOf<WalkieTarget?>(null) }
 
     var isMicOn by remember { mutableStateOf(false) }
-    var activeCallId by remember { mutableStateOf<String?>(null) }
-    var isCallActive by remember { mutableStateOf(false) }
-    var activePeerWorkerId by remember { mutableStateOf<String?>(null) }
+    var activeCallId by WalkieGlobalState.activeCallId
+    var isCallActive by WalkieGlobalState.isCallActive
+    var activePeerWorkerId by WalkieGlobalState.activePeerWorkerId
 
-    val pendingIncomingCalls = remember { mutableStateListOf<IncomingCallUiState>() }
-    val missedCalls = remember { mutableStateListOf<MissedCallUiState>() }
+    val pendingIncomingCalls = WalkieGlobalState.pendingIncomingCalls
+    val missedCallItems = WalkieMissedCallState.items
 
-    var callStatusText by remember { mutableStateOf("대기 중") }
 
-    val latestActiveCallId by rememberUpdatedState(activeCallId)
+    var callStatusText by WalkieGlobalState.lastStatusText
+    var peerEndedDialogText by remember { mutableStateOf<String?>(null) }
 
     fun workerDisplayName(worker: OnlineWorkerDto): String {
         val id = worker.workerId?.trim()
@@ -140,7 +135,27 @@ fun WalkieTalkieScreen(
             "ring_timeout" -> "응답 없음"
             "callee_selected_other" -> "다른 요청 연결"
             "callee_busy" -> "통화 중 차단"
+            "caller_cancelled" -> "요청자 취소"
             else -> reason
+        }
+    }
+
+    fun callFailedReasonText(reason: String?): String {
+        return when (reason) {
+            "ring_timeout" -> "상대방이 응답하지 않았습니다."
+            "caller_cancelled" -> "연결 요청이 취소되었습니다."
+            "callee_selected_other" -> "상대방이 다른 요청을 수락했습니다."
+            "callee_busy" -> "상대방이 통화 중입니다."
+            else -> "연결 요청이 종료되었습니다."
+        }
+    }
+
+    fun callEndedStatusText(reason: String?): String {
+        return when (reason) {
+            "self_ended" -> "통화 종료됨"
+            "peer_ended" -> "상대방이 통화를 종료했습니다."
+            "peer_disconnected" -> "상대방 연결이 끊어졌습니다."
+            else -> "통화 종료됨"
         }
     }
 
@@ -165,20 +180,6 @@ fun WalkieTalkieScreen(
             endedAt = item.endedAt,
             read = item.read
         )
-    }
-
-    fun upsertMissedCall(item: WalkieSignalingClient.MissedCallDto) {
-        val uiItem = toMissedUiState(item)
-        val key = uiItem.missedId.ifBlank { uiItem.callId }
-        val index = missedCalls.indexOfFirst {
-            (it.missedId.ifBlank { it.callId }) == key
-        }
-
-        if (index >= 0) {
-            missedCalls[index] = uiItem
-        } else {
-            missedCalls.add(0, uiItem)
-        }
     }
 
     fun isMonitorSelected(): Boolean {
@@ -311,7 +312,6 @@ fun WalkieTalkieScreen(
     fun exitScreen() {
         endCurrentCall()
         WalkieTalkieManager.stopTransmit()
-        WalkieSignalingClient.disconnect()
         onBackClick()
     }
 
@@ -435,7 +435,7 @@ fun WalkieTalkieScreen(
                 }
 
                 val index = pendingIncomingCalls.indexOfFirst { it.callId == callId }
-                val item = IncomingCallUiState(
+                val item = IncomingWalkieCallState(
                     callId = callId,
                     fromWorkerId = fromWorkerId,
                     fromName = fromName ?: fromWorkerId,
@@ -481,11 +481,34 @@ fun WalkieTalkieScreen(
                 }
             }
 
-            override fun onCallEnded(callId: String, reason: String?) {
+            override fun onCallFailed(callId: String, reason: String?, peerWorkerId: String?) {
+                pendingIncomingCalls.removeAll { it.callId == callId }
+                val message = callFailedReasonText(reason)
+
+                if (activeCallId == callId) {
+                    clearCallState(message)
+                } else if (activeCallId == null && pendingIncomingCalls.isEmpty()) {
+                    callStatusText = message
+                } else if (pendingIncomingCalls.isNotEmpty()) {
+                    callStatusText = "${pendingIncomingCalls.size}건 연결 요청"
+                }
+            }
+
+            override fun onCallEnded(
+                callId: String,
+                reason: String?,
+                byWorkerId: String?,
+                peerWorkerId: String?
+            ) {
                 pendingIncomingCalls.removeAll { it.callId == callId }
 
                 if (activeCallId == callId) {
-                    clearCallState("통화 종료됨: ${reason ?: "-"}")
+                    val message = callEndedStatusText(reason)
+                    clearCallState(message)
+
+                    if (reason == "peer_ended") {
+                        peerEndedDialogText = "상대방이 통화를 종료했습니다."
+                    }
                 } else if (pendingIncomingCalls.isEmpty() && activeCallId == null) {
                     callStatusText = "대기 중"
                 } else if (pendingIncomingCalls.isNotEmpty()) {
@@ -498,12 +521,11 @@ fun WalkieTalkieScreen(
             }
 
             override fun onMissedCallsList(items: List<WalkieSignalingClient.MissedCallDto>) {
-                missedCalls.clear()
-                missedCalls.addAll(items.map { toMissedUiState(it) })
+                WalkieMissedCallState.replaceAll(items)
             }
 
             override fun onMissedCallAdded(item: WalkieSignalingClient.MissedCallDto) {
-                upsertMissedCall(item)
+                WalkieMissedCallState.upsert(item)
             }
 
             override fun onError(message: String) {
@@ -512,35 +534,24 @@ fun WalkieTalkieScreen(
             }
         }
 
-        WalkieSignalingClient.connect(
-            serverBaseUrl = ServerConfig.getBaseHttpUrl(context),
-            workerId = currentWorkerId
-        )
     }
 
+
     LaunchedEffect(currentWorkerId) {
-        while (true) {
-            WalkieSignalingClient.ping()
-            delay(5000L)
-        }
+        // 화면 진입 시 서비스가 이미 연결되어 있으면 onConnected가 다시 호출되지 않을 수 있어
+        // 현재 부재중 목록을 한 번 더 요청합니다.
+        WalkieSignalingClient.missedCallsGet(currentWorkerId)
     }
+
 
     DisposableEffect(Unit) {
         onDispose {
-            val callId = latestActiveCallId
-
-            if (!callId.isNullOrBlank()) {
-                WalkieSignalingClient.endCall(
-                    callId = callId,
-                    workerId = currentWorkerId
-                )
-            }
-
             WalkieTalkieManager.stopTransmit()
-            WalkieSignalingClient.disconnect()
             WalkieSignalingClient.listener = null
         }
     }
+
+    val missedCalls = missedCallItems.map { toMissedUiState(it) }
 
     val groupWorkers = onlineWorkers.filter { worker ->
         val otherWorkerId = worker.workerId?.trim()
@@ -558,6 +569,19 @@ fun WalkieTalkieScreen(
 
     val hasMonitorInOnlineWorkers = onlineWorkers.any {
         it.workerId?.trim() == MONITOR_WORKER_ID
+    }
+
+    peerEndedDialogText?.let { text ->
+        AlertDialog(
+            onDismissRequest = { peerEndedDialogText = null },
+            title = { Text("통화 종료") },
+            text = { Text(text) },
+            confirmButton = {
+                Button(onClick = { peerEndedDialogText = null }) {
+                    Text("확인")
+                }
+            }
+        )
     }
 
     Scaffold(
@@ -785,10 +809,10 @@ fun WalkieTalkieScreen(
 
                                         OutlinedButton(
                                             onClick = {
-                                                missedCalls.removeAll { item ->
-                                                    (item.missedId.ifBlank { item.callId }) ==
-                                                            (missed.missedId.ifBlank { missed.callId })
-                                                }
+                                                WalkieMissedCallState.remove(
+                                                    missedId = missed.missedId,
+                                                    callId = missed.callId
+                                                )
                                                 WalkieSignalingClient.missedCallsRemove(
                                                     workerId = currentWorkerId,
                                                     missedId = missed.missedId,

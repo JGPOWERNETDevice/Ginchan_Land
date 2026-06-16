@@ -6,13 +6,30 @@ import android.app.NotificationManager
 import android.app.Service
 import android.content.Intent
 import android.os.Build
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import net.jgpower.gichan_land.R
+import net.jgpower.gichan_land.data.app.AppVisibilityState
+import net.jgpower.gichan_land.data.walkie.WalkieGlobalState
+import net.jgpower.gichan_land.data.walkie.WalkieMissedCallState
 import net.jgpower.gichan_land.network.AppWebSocketManager
+import net.jgpower.gichan_land.network.ServerConfig
+import net.jgpower.gichan_land.network.WalkieSignalingClient
 
 class WebSocketForegroundService : Service() {
+
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private var walkieWorkerId: String? = null
+
+    private val walkiePingRunnable = object : Runnable {
+        override fun run() {
+            WalkieSignalingClient.ping()
+            mainHandler.postDelayed(this, 5000L)
+        }
+    }
 
     override fun onCreate() {
         super.onCreate()
@@ -59,11 +76,35 @@ class WebSocketForegroundService : Service() {
             Log.e("WS_SERVICE", "connect failed", e)
         }
 
+        startWalkieSignaling(workerId)
+
         return START_STICKY
     }
 
+    private fun callFailedReasonText(reason: String?): String {
+        return when (reason) {
+            "ring_timeout" -> "상대방이 응답하지 않았습니다."
+            "caller_cancelled" -> "연결 요청이 취소되었습니다."
+            "callee_selected_other" -> "상대방이 다른 요청을 수락했습니다."
+            "callee_busy" -> "상대방이 통화 중입니다."
+            else -> "연결 실패"
+        }
+    }
+
+    private fun callEndedStatusText(reason: String?): String {
+        return when (reason) {
+            "peer_ended" -> "상대방이 통화를 종료했습니다."
+            "peer_disconnected" -> "상대방 연결이 끊어졌습니다."
+            "self_ended" -> "통화 종료됨"
+            else -> "통화 종료됨"
+        }
+    }
+
     override fun onDestroy() {
-        Log.d("WS_SERVICE", "onDestroy - do not disconnect here")
+        Log.d("WS_SERVICE", "onDestroy")
+        mainHandler.removeCallbacks(walkiePingRunnable)
+        WalkieSignalingClient.setBackgroundListener(null)
+        WalkieSignalingClient.disconnect()
         super.onDestroy()
     }
 
@@ -74,6 +115,132 @@ class WebSocketForegroundService : Service() {
 
     override fun onBind(intent: Intent?): IBinder? {
         return null
+    }
+
+
+    private fun startWalkieSignaling(workerId: String) {
+        walkieWorkerId = workerId
+
+        WalkieSignalingClient.setBackgroundListener(
+            object : WalkieSignalingClient.Listener {
+                override fun onConnected() {
+                    WalkieSignalingClient.missedCallsGet(workerId)
+                }
+
+                override fun onDisconnected() {
+                    // foreground service가 살아있는 동안 OkHttp/서버 연결이 끊기면
+                    // 다음 서비스 재시작 또는 사용자의 화면 진입 시 다시 연결됩니다.
+                }
+
+                override fun onCallRinging(callId: String, toWorkerId: String) {
+                    WalkieGlobalState.setRinging(callId, toWorkerId)
+                }
+
+                override fun onIncomingCall(
+                    callId: String,
+                    fromWorkerId: String,
+                    fromName: String?,
+                    fromAreaGroup: String?
+                ) {
+                    WalkieGlobalState.upsertIncomingCall(
+                        callId = callId,
+                        fromWorkerId = fromWorkerId,
+                        fromName = fromName,
+                        fromAreaGroup = fromAreaGroup
+                    )
+
+                    if (!AppVisibilityState.isForeground.value) {
+                        AppNotificationManager.showWalkieIncomingCallNotification(
+                            context = applicationContext,
+                            callId = callId,
+                            workerId = workerId,
+                            fromWorkerId = fromWorkerId,
+                            fromName = fromName,
+                            fromAreaGroup = fromAreaGroup
+                        )
+                    }
+                }
+
+                override fun onCallActive(callId: String, peerWorkerId: String, talkerId: String?) {
+                    WalkieGlobalState.setActive(callId, peerWorkerId)
+                }
+
+                override fun onCallRejected(callId: String, byWorkerId: String?) {
+                    val wasIncoming = WalkieGlobalState.pendingIncomingCalls.any { it.callId == callId }
+                    val wasActiveOrOutgoing = WalkieGlobalState.activeCallId.value == callId
+
+                    AppNotificationManager.cancelWalkieIncomingCallNotification(applicationContext, callId)
+
+                    if (wasIncoming) {
+                        WalkieGlobalState.removeIncomingCall(callId)
+                    }
+
+                    if (wasActiveOrOutgoing) {
+                        WalkieGlobalState.clearCall("통화 거절됨")
+                    }
+                }
+
+                override fun onCallFailed(callId: String, reason: String?, peerWorkerId: String?) {
+                    val wasIncoming = WalkieGlobalState.pendingIncomingCalls.any { it.callId == callId }
+                    val wasActiveOrOutgoing = WalkieGlobalState.activeCallId.value == callId
+
+                    AppNotificationManager.cancelWalkieIncomingCallNotification(applicationContext, callId)
+
+                    if (wasIncoming) {
+                        WalkieGlobalState.removeIncomingCall(callId)
+                    }
+
+                    if (wasActiveOrOutgoing) {
+                        WalkieGlobalState.clearCall(callFailedReasonText(reason))
+                    }
+                }
+
+                override fun onCallEnded(
+                    callId: String,
+                    reason: String?,
+                    byWorkerId: String?,
+                    peerWorkerId: String?
+                ) {
+                    val wasIncoming = WalkieGlobalState.pendingIncomingCalls.any { it.callId == callId }
+                    val wasActiveOrOutgoing = WalkieGlobalState.activeCallId.value == callId
+
+                    AppNotificationManager.cancelWalkieIncomingCallNotification(applicationContext, callId)
+
+                    if (wasIncoming) {
+                        WalkieGlobalState.removeIncomingCall(callId)
+                    }
+
+                    if (wasActiveOrOutgoing) {
+                        if (reason == "peer_ended") {
+                            WalkieGlobalState.showPeerEndedPopup.value = true
+                        }
+                        WalkieGlobalState.clearCall(callEndedStatusText(reason))
+                    }
+                }
+
+                override fun onMicState(callId: String, workerId: String, micOn: Boolean) = Unit
+
+                override fun onMissedCallsList(items: List<WalkieSignalingClient.MissedCallDto>) {
+                    WalkieMissedCallState.replaceAll(items)
+                }
+
+                override fun onMissedCallAdded(item: WalkieSignalingClient.MissedCallDto) {
+                    WalkieMissedCallState.upsert(item)
+                }
+
+                override fun onError(message: String) {
+                    Log.d("WS_SERVICE", "walkie signaling error=$message")
+                }
+            }
+        )
+
+        WalkieSignalingClient.connect(
+            serverBaseUrl = ServerConfig.getBaseHttpUrl(applicationContext),
+            workerId = workerId
+        )
+
+        mainHandler.removeCallbacks(walkiePingRunnable)
+        mainHandler.postDelayed(walkiePingRunnable, 5000L)
     }
 
     private fun createForegroundNotification(): Notification {
