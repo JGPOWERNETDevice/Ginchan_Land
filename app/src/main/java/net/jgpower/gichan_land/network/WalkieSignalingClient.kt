@@ -8,6 +8,7 @@ import okhttp3.Request
 import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
+import org.json.JSONArray
 import org.json.JSONObject
 import java.util.concurrent.TimeUnit
 
@@ -26,6 +27,19 @@ object WalkieSignalingClient {
     private var currentWorkerId: String? = null
 
     var listener: Listener? = null
+
+    data class MissedCallDto(
+        val missedId: String,
+        val callId: String,
+        val fromWorkerId: String,
+        val fromName: String?,
+        val fromAreaGroup: String?,
+        val toWorkerId: String,
+        val reason: String,
+        val createdAt: Long,
+        val endedAt: Long,
+        val read: Boolean
+    )
 
     interface Listener {
         fun onConnected()
@@ -49,6 +63,8 @@ object WalkieSignalingClient {
         fun onCallRejected(callId: String, byWorkerId: String?)
         fun onCallEnded(callId: String, reason: String?)
         fun onMicState(callId: String, workerId: String, micOn: Boolean)
+        fun onMissedCallsList(items: List<MissedCallDto>) {}
+        fun onMissedCallAdded(item: MissedCallDto) {}
         fun onError(message: String)
     }
 
@@ -75,16 +91,14 @@ object WalkieSignalingClient {
             object : WebSocketListener() {
                 override fun onOpen(webSocket: WebSocket, response: Response) {
                     Log.d(TAG, "connected $wsUrl")
-
                     this@WalkieSignalingClient.webSocket = webSocket
 
-                    val json = JSONObject()
-                        .put("type", "connect")
-                        .put("workerId", workerId)
-                        .toString()
-
-                    Log.d(TAG, "send $json")
-                    webSocket.send(json)
+                    sendJson(
+                        mapOf(
+                            "type" to "connect",
+                            "workerId" to workerId
+                        )
+                    )
 
                     post {
                         listener?.onConnected()
@@ -196,7 +210,47 @@ object WalkieSignalingClient {
         )
     }
 
-    // 동시 송신 허용 구조에서는 송신권 요청이 아니라 MIC ON 상태 알림입니다.
+    fun missedCallsGet(workerId: String) {
+        sendJson(
+            mapOf(
+                "type" to "missed_calls_get",
+                "workerId" to workerId
+            )
+        )
+    }
+
+    fun missedCallsMarkRead(workerId: String, missedId: String? = null, callId: String? = null) {
+        val json = JSONObject()
+            .put("type", "missed_calls_mark_read")
+            .put("workerId", workerId)
+
+        if (!missedId.isNullOrBlank()) json.put("missedId", missedId)
+        if (!callId.isNullOrBlank()) json.put("callId", callId)
+
+        sendText(json.toString())
+    }
+
+    fun missedCallsRemove(workerId: String, missedId: String? = null, callId: String? = null) {
+        val json = JSONObject()
+            .put("type", "missed_calls_remove")
+            .put("workerId", workerId)
+
+        if (!missedId.isNullOrBlank()) json.put("missedId", missedId)
+        if (!callId.isNullOrBlank()) json.put("callId", callId)
+
+        sendText(json.toString())
+    }
+
+    fun missedCallsClear(workerId: String) {
+        sendJson(
+            mapOf(
+                "type" to "missed_calls_clear",
+                "workerId" to workerId
+            )
+        )
+    }
+
+    // 구버전 호환용. 현재 Node-RED는 talk_start/talk_stop을 사용하지 않습니다.
     fun micOn(callId: String, workerId: String) {
         sendJson(
             mapOf(
@@ -207,7 +261,6 @@ object WalkieSignalingClient {
         )
     }
 
-    // 동시 송신 허용 구조에서는 송신권 반납이 아니라 MIC OFF 상태 알림입니다.
     fun micOff(callId: String, workerId: String) {
         sendJson(
             mapOf(
@@ -225,7 +278,10 @@ object WalkieSignalingClient {
             json.put(key, value)
         }
 
-        val text = json.toString()
+        sendText(json.toString())
+    }
+
+    private fun sendText(text: String) {
         Log.d(TAG, "send $text")
 
         val sent = webSocket?.send(text) ?: false
@@ -294,9 +350,17 @@ object WalkieSignalingClient {
                         )
                     }
 
-                    "talk_granted" -> {
-                        // 이전 클라이언트 호환용 응답입니다. 현재 앱은 이 응답을 기다리지 않습니다.
+                    "missed_calls_list" -> {
+                        listener?.onMissedCallsList(parseMissedCallArray(json.optJSONArray("items")))
                     }
+
+                    "missed_call_added" -> {
+                        json.optJSONObject("item")?.let { item ->
+                            listener?.onMissedCallAdded(parseMissedCall(item))
+                        }
+                    }
+
+                    "talk_granted" -> Unit
 
                     "talk_denied" -> {
                         listener?.onError(
@@ -317,6 +381,32 @@ object WalkieSignalingClient {
             Log.e(TAG, "handle message failed", e)
             post { listener?.onError(e.message ?: "message parse error") }
         }
+    }
+
+    private fun parseMissedCallArray(array: JSONArray?): List<MissedCallDto> {
+        if (array == null) return emptyList()
+
+        val result = mutableListOf<MissedCallDto>()
+        for (i in 0 until array.length()) {
+            val item = array.optJSONObject(i) ?: continue
+            result.add(parseMissedCall(item))
+        }
+        return result
+    }
+
+    private fun parseMissedCall(json: JSONObject): MissedCallDto {
+        return MissedCallDto(
+            missedId = json.optString("missedId"),
+            callId = json.optString("callId"),
+            fromWorkerId = json.optString("fromWorkerId"),
+            fromName = json.optString("fromName").takeIf { it.isNotBlank() && it != "null" },
+            fromAreaGroup = json.optString("fromAreaGroup").takeIf { it.isNotBlank() && it != "null" },
+            toWorkerId = json.optString("toWorkerId"),
+            reason = json.optString("reason").ifBlank { "missed" },
+            createdAt = json.optLong("createdAt", 0L),
+            endedAt = json.optLong("endedAt", 0L),
+            read = json.optBoolean("read", false)
+        )
     }
 
     private fun post(block: () -> Unit) {

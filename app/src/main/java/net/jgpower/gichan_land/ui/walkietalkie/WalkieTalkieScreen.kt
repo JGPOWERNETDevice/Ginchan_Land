@@ -52,6 +52,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.delay
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import net.jgpower.gichan_land.data.walkie.OnlineWorkerDto
 import net.jgpower.gichan_land.data.walkie.WalkieTarget
 import net.jgpower.gichan_land.data.walkie.WalkieTargetType
@@ -63,6 +66,25 @@ import net.jgpower.gichan_land.network.WalkieTalkieManager
 private const val MONITOR_WORKER_ID = "monitor"
 private const val MONITOR_NAME = "중앙관제"
 private const val MONITOR_GROUP = "중앙관제"
+
+private data class IncomingCallUiState(
+    val callId: String,
+    val fromWorkerId: String,
+    val fromName: String?,
+    val fromAreaGroup: String?
+)
+
+private data class MissedCallUiState(
+    val missedId: String,
+    val callId: String,
+    val fromWorkerId: String,
+    val fromName: String?,
+    val fromAreaGroup: String?,
+    val reason: String,
+    val createdAt: Long,
+    val endedAt: Long,
+    val read: Boolean
+)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -89,9 +111,8 @@ fun WalkieTalkieScreen(
     var isCallActive by remember { mutableStateOf(false) }
     var activePeerWorkerId by remember { mutableStateOf<String?>(null) }
 
-    var pendingIncomingCallId by remember { mutableStateOf<String?>(null) }
-    var pendingIncomingFromWorkerId by remember { mutableStateOf<String?>(null) }
-    var pendingIncomingFromName by remember { mutableStateOf<String?>(null) }
+    val pendingIncomingCalls = remember { mutableStateListOf<IncomingCallUiState>() }
+    val missedCalls = remember { mutableStateListOf<MissedCallUiState>() }
 
     var callStatusText by remember { mutableStateOf("대기 중") }
 
@@ -111,6 +132,53 @@ fun WalkieTalkieScreen(
 
     fun workerDisplayId(worker: OnlineWorkerDto): String {
         return worker.workerId?.trim()?.takeIf { it.isNotBlank() } ?: "-"
+    }
+
+
+    fun missedReasonText(reason: String): String {
+        return when (reason) {
+            "ring_timeout" -> "응답 없음"
+            "callee_selected_other" -> "다른 요청 연결"
+            "callee_busy" -> "통화 중 차단"
+            else -> reason
+        }
+    }
+
+    fun formatMissedTime(epochMillis: Long): String {
+        if (epochMillis <= 0L) return "-"
+        return try {
+            SimpleDateFormat("MM/dd HH:mm", Locale.getDefault()).format(Date(epochMillis))
+        } catch (_: Exception) {
+            "-"
+        }
+    }
+
+    fun toMissedUiState(item: WalkieSignalingClient.MissedCallDto): MissedCallUiState {
+        return MissedCallUiState(
+            missedId = item.missedId,
+            callId = item.callId,
+            fromWorkerId = item.fromWorkerId,
+            fromName = item.fromName ?: item.fromWorkerId,
+            fromAreaGroup = item.fromAreaGroup,
+            reason = item.reason,
+            createdAt = item.createdAt,
+            endedAt = item.endedAt,
+            read = item.read
+        )
+    }
+
+    fun upsertMissedCall(item: WalkieSignalingClient.MissedCallDto) {
+        val uiItem = toMissedUiState(item)
+        val key = uiItem.missedId.ifBlank { uiItem.callId }
+        val index = missedCalls.indexOfFirst {
+            (it.missedId.ifBlank { it.callId }) == key
+        }
+
+        if (index >= 0) {
+            missedCalls[index] = uiItem
+        } else {
+            missedCalls.add(0, uiItem)
+        }
     }
 
     fun isMonitorSelected(): Boolean {
@@ -221,9 +289,7 @@ fun WalkieTalkieScreen(
         activeCallId = null
         isCallActive = false
         activePeerWorkerId = null
-        pendingIncomingCallId = null
-        pendingIncomingFromWorkerId = null
-        pendingIncomingFromName = null
+        pendingIncomingCalls.clear()
         isMicOn = false
         callStatusText = message
         WalkieTalkieManager.stopTransmit()
@@ -332,6 +398,7 @@ fun WalkieTalkieScreen(
         WalkieSignalingClient.listener = object : WalkieSignalingClient.Listener {
             override fun onConnected() {
                 callStatusText = "신호 서버 연결됨"
+                WalkieSignalingClient.missedCallsGet(currentWorkerId)
             }
 
             override fun onDisconnected() {
@@ -359,11 +426,34 @@ fun WalkieTalkieScreen(
                 fromName: String?,
                 fromAreaGroup: String?
             ) {
-                pendingIncomingCallId = callId
+                if (isCallActive || activeCallId != null) {
+                    WalkieSignalingClient.rejectCall(
+                        callId = callId,
+                        workerId = currentWorkerId
+                    )
+                    return
+                }
+
+                val index = pendingIncomingCalls.indexOfFirst { it.callId == callId }
+                val item = IncomingCallUiState(
+                    callId = callId,
+                    fromWorkerId = fromWorkerId,
+                    fromName = fromName ?: fromWorkerId,
+                    fromAreaGroup = fromAreaGroup
+                )
+
+                if (index >= 0) {
+                    pendingIncomingCalls[index] = item
+                } else {
+                    pendingIncomingCalls.add(item)
+                }
+
                 isCallActive = false
-                pendingIncomingFromWorkerId = fromWorkerId
-                pendingIncomingFromName = fromName ?: fromWorkerId
-                callStatusText = "${fromName ?: fromWorkerId} 연결 요청"
+                callStatusText = if (pendingIncomingCalls.size == 1) {
+                    "${item.fromName ?: item.fromWorkerId} 연결 요청"
+                } else {
+                    "${pendingIncomingCalls.size}건 연결 요청"
+                }
             }
 
             override fun onCallActive(
@@ -374,20 +464,46 @@ fun WalkieTalkieScreen(
                 activeCallId = callId
                 isCallActive = true
                 activePeerWorkerId = peerWorkerId
+                pendingIncomingCalls.clear()
                 callStatusText = "통화 연결됨"
                 setTargetForPeer(peerWorkerId)
             }
 
             override fun onCallRejected(callId: String, byWorkerId: String?) {
-                clearCallState("통화 거절됨")
+                pendingIncomingCalls.removeAll { it.callId == callId }
+
+                if (activeCallId == callId) {
+                    clearCallState("통화 거절됨")
+                } else if (pendingIncomingCalls.isEmpty() && activeCallId == null) {
+                    callStatusText = "대기 중"
+                } else if (pendingIncomingCalls.isNotEmpty()) {
+                    callStatusText = "${pendingIncomingCalls.size}건 연결 요청"
+                }
             }
 
             override fun onCallEnded(callId: String, reason: String?) {
-                clearCallState("통화 종료됨: ${reason ?: "-"}")
+                pendingIncomingCalls.removeAll { it.callId == callId }
+
+                if (activeCallId == callId) {
+                    clearCallState("통화 종료됨: ${reason ?: "-"}")
+                } else if (pendingIncomingCalls.isEmpty() && activeCallId == null) {
+                    callStatusText = "대기 중"
+                } else if (pendingIncomingCalls.isNotEmpty()) {
+                    callStatusText = "${pendingIncomingCalls.size}건 연결 요청"
+                }
             }
 
             override fun onMicState(callId: String, workerId: String, micOn: Boolean) {
                 // MIC 상태 WebSocket 알림은 사용하지 않음
+            }
+
+            override fun onMissedCallsList(items: List<WalkieSignalingClient.MissedCallDto>) {
+                missedCalls.clear()
+                missedCalls.addAll(items.map { toMissedUiState(it) })
+            }
+
+            override fun onMissedCallAdded(item: WalkieSignalingClient.MissedCallDto) {
+                upsertMissedCall(item)
             }
 
             override fun onError(message: String) {
@@ -497,7 +613,8 @@ fun WalkieTalkieScreen(
                 )
             }
 
-            pendingIncomingCallId?.let { callId ->
+
+            if (pendingIncomingCalls.isNotEmpty()) {
                 Card(
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(16.dp),
@@ -505,44 +622,184 @@ fun WalkieTalkieScreen(
                 ) {
                     Column(
                         modifier = Modifier.padding(16.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
                         Text(
-                            text = "${pendingIncomingFromName ?: pendingIncomingFromWorkerId} 연결 요청",
+                            text = "연결 요청 목록 (${pendingIncomingCalls.size})",
                             fontWeight = FontWeight.Bold
                         )
 
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Button(
-                                onClick = {
-                                    WalkieSignalingClient.acceptCall(
-                                        callId = callId,
-                                        workerId = currentWorkerId
+                        pendingIncomingCalls.forEach { incoming ->
+                            Card(
+                                modifier = Modifier.fillMaxWidth(),
+                                shape = RoundedCornerShape(12.dp),
+                                colors = CardDefaults.cardColors(
+                                    containerColor = MaterialTheme.colorScheme.surfaceVariant
+                                )
+                            ) {
+                                Column(
+                                    modifier = Modifier.padding(12.dp),
+                                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    Text(
+                                        text = "${incoming.fromName ?: incoming.fromWorkerId} 연결 요청",
+                                        fontWeight = FontWeight.Bold
                                     )
 
-                                    pendingIncomingCallId = null
-                                    pendingIncomingFromWorkerId = null
-                                    pendingIncomingFromName = null
-                                    callStatusText = "통화 수락 중..."
+                                    Text(
+                                        text = "작업자 ID: ${incoming.fromWorkerId}",
+                                        style = MaterialTheme.typography.bodySmall
+                                    )
+
+                                    incoming.fromAreaGroup?.takeIf { it.isNotBlank() }?.let { group ->
+                                        Text(
+                                            text = "그룹: $group",
+                                            style = MaterialTheme.typography.bodySmall
+                                        )
+                                    }
+
+                                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        Button(
+                                            onClick = {
+                                                WalkieSignalingClient.acceptCall(
+                                                    callId = incoming.callId,
+                                                    workerId = currentWorkerId
+                                                )
+
+                                                activeCallId = incoming.callId
+                                                isCallActive = false
+                                                activePeerWorkerId = incoming.fromWorkerId
+                                                pendingIncomingCalls.removeAll { it.callId == incoming.callId }
+                                                callStatusText = "통화 수락 중..."
+                                            },
+                                            enabled = activeCallId == null
+                                        ) {
+                                            Text("수신")
+                                        }
+
+                                        OutlinedButton(
+                                            onClick = {
+                                                WalkieSignalingClient.rejectCall(
+                                                    callId = incoming.callId,
+                                                    workerId = currentWorkerId
+                                                )
+
+                                                pendingIncomingCalls.removeAll { it.callId == incoming.callId }
+                                                callStatusText = if (pendingIncomingCalls.isEmpty()) {
+                                                    "대기 중"
+                                                } else {
+                                                    "${pendingIncomingCalls.size}건 연결 요청"
+                                                }
+                                            },
+                                            enabled = activeCallId == null
+                                        ) {
+                                            Text("거절")
+                                        }
+                                    }
                                 }
-                            ) {
-                                Text("수신")
                             }
+                        }
+                    }
+                }
+            }
 
-                            OutlinedButton(
-                                onClick = {
-                                    WalkieSignalingClient.rejectCall(
-                                        callId = callId,
-                                        workerId = currentWorkerId
+            if (missedCalls.isNotEmpty()) {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(16.dp),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+                ) {
+                    Column(
+                        modifier = Modifier.padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        val unreadCount = missedCalls.count { !it.read }
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "부재중 목록 (${missedCalls.size})" + if (unreadCount > 0) " / 미확인 $unreadCount" else "",
+                                fontWeight = FontWeight.Bold
+                            )
+
+                            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                OutlinedButton(
+                                    onClick = { WalkieSignalingClient.missedCallsGet(currentWorkerId) }
+                                ) {
+                                    Text("새로고침")
+                                }
+                            }
+                        }
+
+                        missedCalls.take(5).forEach { missed ->
+                            Card(
+                                modifier = Modifier.fillMaxWidth(),
+                                shape = RoundedCornerShape(12.dp),
+                                colors = CardDefaults.cardColors(
+                                    containerColor = MaterialTheme.colorScheme.surfaceVariant
+                                )
+                            ) {
+                                Column(
+                                    modifier = Modifier.padding(12.dp),
+                                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    Text(
+                                        text = "${missed.fromName ?: missed.fromWorkerId} 부재중 요청",
+                                        fontWeight = if (missed.read) FontWeight.Normal else FontWeight.Bold
                                     )
 
-                                    pendingIncomingCallId = null
-                                    pendingIncomingFromWorkerId = null
-                                    pendingIncomingFromName = null
-                                    callStatusText = "대기 중"
+                                    Text(
+                                        text = "사유: ${missedReasonText(missed.reason)} / 시간: ${formatMissedTime(missed.endedAt)}",
+                                        style = MaterialTheme.typography.bodySmall
+                                    )
+
+                                    missed.fromAreaGroup?.takeIf { it.isNotBlank() }?.let { group ->
+                                        Text(
+                                            text = "그룹: $group",
+                                            style = MaterialTheme.typography.bodySmall
+                                        )
+                                    }
+
+                                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        Button(
+                                            onClick = {
+                                                WalkieSignalingClient.requestCall(
+                                                    fromWorkerId = currentWorkerId,
+                                                    fromName = currentWorkerId,
+                                                    fromAreaGroup = myAreaGroup,
+                                                    toWorkerId = missed.fromWorkerId
+                                                )
+                                                WalkieSignalingClient.missedCallsMarkRead(
+                                                    workerId = currentWorkerId,
+                                                    missedId = missed.missedId
+                                                )
+                                                callStatusText = "${missed.fromWorkerId} 수신 요청 중..."
+                                            },
+                                            enabled = activeCallId == null && pendingIncomingCalls.isEmpty()
+                                        ) {
+                                            Text("다시 연결")
+                                        }
+
+                                        OutlinedButton(
+                                            onClick = {
+                                                missedCalls.removeAll { item ->
+                                                    (item.missedId.ifBlank { item.callId }) ==
+                                                            (missed.missedId.ifBlank { missed.callId })
+                                                }
+                                                WalkieSignalingClient.missedCallsRemove(
+                                                    workerId = currentWorkerId,
+                                                    missedId = missed.missedId,
+                                                    callId = missed.callId
+                                                )
+                                            }
+                                        ) {
+                                            Text("닫기")
+                                        }
+                                    }
                                 }
-                            ) {
-                                Text("거절")
                             }
                         }
                     }
@@ -569,7 +826,7 @@ fun WalkieTalkieScreen(
                             if (activeCallId == null) selectGroupAll()
                         },
                         label = { Text("그룹 전체") },
-                        enabled = !myAreaGroup.isNullOrBlank() && activeCallId == null
+                        enabled = !myAreaGroup.isNullOrBlank() && activeCallId == null && pendingIncomingCalls.isEmpty()
                     )
 
                     FilterChip(
@@ -578,7 +835,7 @@ fun WalkieTalkieScreen(
                             if (activeCallId == null) selectMonitor()
                         },
                         label = { Text(MONITOR_NAME) },
-                        enabled = hasMonitorInOnlineWorkers && activeCallId == null
+                        enabled = hasMonitorInOnlineWorkers && activeCallId == null && pendingIncomingCalls.isEmpty()
                     )
 
                     if (!hasMonitorInOnlineWorkers) {
@@ -607,7 +864,7 @@ fun WalkieTalkieScreen(
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .clickable(enabled = activeCallId == null) {
+                                    .clickable(enabled = activeCallId == null && pendingIncomingCalls.isEmpty()) {
                                         toggleWorker(worker)
                                     },
                                 verticalAlignment = Alignment.CenterVertically,
@@ -616,9 +873,9 @@ fun WalkieTalkieScreen(
                                 Checkbox(
                                     checked = checked,
                                     onCheckedChange = {
-                                        if (activeCallId == null) toggleWorker(worker)
+                                        if (activeCallId == null && pendingIncomingCalls.isEmpty()) toggleWorker(worker)
                                     },
-                                    enabled = activeCallId == null
+                                    enabled = activeCallId == null && pendingIncomingCalls.isEmpty()
                                 )
 
                                 Text(text = "${workerDisplayName(worker)} (${workerDisplayId(worker)})")
@@ -669,7 +926,7 @@ fun WalkieTalkieScreen(
                                     "$targetWorkerId 수신 요청 중..."
                                 }
                             },
-                            enabled = activeCallId == null
+                            enabled = activeCallId == null && pendingIncomingCalls.isEmpty()
                         ) {
                             Text("연결 요청")
                         }
