@@ -76,12 +76,15 @@ object WalkieSignalingClient {
                 override fun onOpen(webSocket: WebSocket, response: Response) {
                     Log.d(TAG, "connected $wsUrl")
 
-                    sendJson(
-                        mapOf(
-                            "type" to "connect",
-                            "workerId" to workerId
-                        )
-                    )
+                    this@WalkieSignalingClient.webSocket = webSocket
+
+                    val json = JSONObject()
+                        .put("type", "connect")
+                        .put("workerId", workerId)
+                        .toString()
+
+                    Log.d(TAG, "send $json")
+                    webSocket.send(json)
 
                     post {
                         listener?.onConnected()
@@ -135,13 +138,15 @@ object WalkieSignalingClient {
 
     fun ping() {
         val workerId = currentWorkerId ?: return
+        val socket = webSocket ?: return
 
-        sendJson(
-            mapOf(
-                "type" to "ping",
-                "workerId" to workerId
-            )
-        )
+        val json = JSONObject()
+            .put("type", "ping")
+            .put("workerId", workerId)
+            .toString()
+
+        Log.d(TAG, "send $json")
+        socket.send(json)
     }
 
     fun requestCall(
