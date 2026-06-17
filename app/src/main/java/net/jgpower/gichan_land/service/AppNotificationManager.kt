@@ -185,6 +185,54 @@ object AppNotificationManager {
         NotificationManagerCompat.from(context).cancel(callId.hashCode())
     }
 
+
+    fun showEmergencyBroadcastNotification(
+        context: Context,
+        broadcastId: String,
+        fromWorkerId: String,
+        targetType: String?,
+        targetAreaGroup: String?
+    ) {
+        createChannel(context)
+
+        if (!hasNotificationPermission(context)) {
+            return
+        }
+
+        val title = "긴급 전파 수신"
+        val targetText = when (targetType) {
+            "GROUP" -> "대상 그룹: ${targetAreaGroup ?: "-"}"
+            "ALL" -> "대상: 전체"
+            else -> "대상: 개별"
+        }
+        val message = "중앙관제 긴급 방송을 수신 중입니다. $targetText"
+
+        val openPendingIntent = createMainPendingIntent(
+            context = context,
+            requestCode = ("emergency-$broadcastId").hashCode()
+        )
+
+        val notification = NotificationCompat.Builder(context, CHANNEL_ID)
+            .setSmallIcon(R.drawable.ic_launcher_foreground)
+            .setContentTitle(title)
+            .setContentText(message)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(message))
+            .setContentIntent(openPendingIntent)
+            .setAutoCancel(true)
+            .setCategory(NotificationCompat.CATEGORY_ALARM)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .build()
+
+        NotificationManagerCompat.from(context).notify(
+            ("emergency-$broadcastId").hashCode(),
+            notification
+        )
+    }
+
+    fun cancelEmergencyBroadcastNotification(context: Context, broadcastId: String) {
+        NotificationManagerCompat.from(context).cancel(("emergency-$broadcastId").hashCode())
+    }
+
     private fun createMainPendingIntent(
         context: Context,
         requestCode: Int

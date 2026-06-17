@@ -11,6 +11,13 @@ data class IncomingWalkieCallState(
     val fromAreaGroup: String?
 )
 
+data class EmergencyBroadcastState(
+    val broadcastId: String,
+    val fromWorkerId: String,
+    val targetType: String?,
+    val targetAreaGroup: String?
+)
+
 object WalkieGlobalState {
     val pendingIncomingCalls = mutableStateListOf<IncomingWalkieCallState>()
     val activeCallId = mutableStateOf<String?>(null)
@@ -18,6 +25,8 @@ object WalkieGlobalState {
     val isCallActive = mutableStateOf(false)
     val lastStatusText = mutableStateOf("대기 중")
     val showPeerEndedPopup = mutableStateOf(false)
+    val isEmergencyBroadcastActive = mutableStateOf(false)
+    val emergencyBroadcast = mutableStateOf<EmergencyBroadcastState?>(null)
 
     fun upsertIncomingCall(
         callId: String,
@@ -68,6 +77,34 @@ object WalkieGlobalState {
         isCallActive.value = true
         pendingIncomingCalls.clear()
         lastStatusText.value = "통화 연결됨"
+    }
+
+    fun startEmergencyBroadcast(
+        broadcastId: String,
+        fromWorkerId: String,
+        targetType: String?,
+        targetAreaGroup: String?
+    ) {
+        activeCallId.value = null
+        activePeerWorkerId.value = null
+        isCallActive.value = false
+        pendingIncomingCalls.clear()
+        isEmergencyBroadcastActive.value = true
+        emergencyBroadcast.value = EmergencyBroadcastState(
+            broadcastId = broadcastId,
+            fromWorkerId = fromWorkerId,
+            targetType = targetType,
+            targetAreaGroup = targetAreaGroup
+        )
+        lastStatusText.value = "긴급 전파 수신 중"
+    }
+
+    fun endEmergencyBroadcast(message: String = "긴급 전파 종료") {
+        isEmergencyBroadcastActive.value = false
+        emergencyBroadcast.value = null
+        if (activeCallId.value == null && pendingIncomingCalls.isEmpty()) {
+            lastStatusText.value = message
+        }
     }
 
     fun clearCall(message: String = "대기 중") {

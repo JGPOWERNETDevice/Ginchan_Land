@@ -25,6 +25,7 @@ object WalkieSignalingClient {
 
     private var webSocket: WebSocket? = null
     private var currentWorkerId: String? = null
+    private var currentAreaGroup: String? = null
 
     var listener: Listener? = null
     private var backgroundListener: Listener? = null
@@ -79,14 +80,25 @@ object WalkieSignalingClient {
         fun onMicState(callId: String, workerId: String, micOn: Boolean)
         fun onMissedCallsList(items: List<MissedCallDto>) {}
         fun onMissedCallAdded(item: MissedCallDto) {}
+        fun onEmergencyBroadcastStarted(
+            broadcastId: String,
+            fromWorkerId: String,
+            targetType: String?,
+            targetAreaGroup: String?
+        ) {}
+        fun onEmergencyBroadcastEnded(broadcastId: String, reason: String?) {}
         fun onError(message: String)
     }
 
     fun connect(
         serverBaseUrl: String,
-        workerId: String
+        workerId: String,
+        areaGroup: String? = null
     ) {
         currentWorkerId = workerId
+        if (!areaGroup.isNullOrBlank()) {
+            currentAreaGroup = areaGroup
+        }
 
         val wsUrl =
             serverBaseUrl
@@ -107,12 +119,15 @@ object WalkieSignalingClient {
                     Log.d(TAG, "connected $wsUrl")
                     this@WalkieSignalingClient.webSocket = webSocket
 
-                    sendJson(
-                        mapOf(
-                            "type" to "connect",
-                            "workerId" to workerId
-                        )
-                    )
+                    val connectJson = JSONObject()
+                        .put("type", "connect")
+                        .put("workerId", workerId)
+
+                    currentAreaGroup?.takeIf { it.isNotBlank() }?.let { group ->
+                        connectJson.put("areaGroup", group)
+                    }
+
+                    sendText(connectJson.toString())
 
                     post {
                         notifyListeners { it.onConnected() }
@@ -164,14 +179,36 @@ object WalkieSignalingClient {
         webSocket = null
     }
 
+    fun updateWorkerInfo(areaGroup: String?) {
+        if (!areaGroup.isNullOrBlank()) {
+            currentAreaGroup = areaGroup
+        }
+
+        val workerId = currentWorkerId ?: return
+        val json = JSONObject()
+            .put("type", "worker_info_update")
+            .put("workerId", workerId)
+
+        currentAreaGroup?.takeIf { it.isNotBlank() }?.let { group ->
+            json.put("areaGroup", group)
+        }
+
+        sendText(json.toString())
+    }
+
     fun ping() {
         val workerId = currentWorkerId ?: return
         val socket = webSocket ?: return
 
-        val json = JSONObject()
+        val jsonObject = JSONObject()
             .put("type", "ping")
             .put("workerId", workerId)
-            .toString()
+
+        currentAreaGroup?.takeIf { it.isNotBlank() }?.let { group ->
+            jsonObject.put("areaGroup", group)
+        }
+
+        val json = jsonObject.toString()
 
         Log.d(TAG, "send $json")
         socket.send(json)
@@ -220,6 +257,35 @@ object WalkieSignalingClient {
                 "type" to "call_end",
                 "callId" to callId,
                 "workerId" to workerId
+            )
+        )
+    }
+
+    fun emergencyBroadcastStart(
+        fromWorkerId: String,
+        targetType: String,
+        targetWorkerIds: List<String>,
+        targetAreaGroup: String? = null
+    ) {
+        val json = JSONObject()
+            .put("type", "emergency_broadcast_start")
+            .put("fromWorkerId", fromWorkerId)
+            .put("targetType", targetType)
+            .put("targetWorkerIds", JSONArray(targetWorkerIds))
+
+        if (!targetAreaGroup.isNullOrBlank()) {
+            json.put("targetAreaGroup", targetAreaGroup)
+        }
+
+        sendText(json.toString())
+    }
+
+    fun emergencyBroadcastEnd(broadcastId: String, fromWorkerId: String) {
+        sendJson(
+            mapOf(
+                "type" to "emergency_broadcast_end",
+                "broadcastId" to broadcastId,
+                "fromWorkerId" to fromWorkerId
             )
         )
     }
@@ -387,6 +453,27 @@ object WalkieSignalingClient {
                                 callId = json.optString("callId"),
                                 workerId = json.optString("workerId"),
                                 micOn = json.optBoolean("micOn", false)
+                            )
+                        }
+                    }
+
+                    "emergency_broadcast_started" -> {
+                        notifyListeners {
+                            it.onEmergencyBroadcastStarted(
+                                broadcastId = json.optString("broadcastId"),
+                                fromWorkerId = json.optString("fromWorkerId").ifBlank { "monitor" },
+                                targetType = json.optString("targetType").takeIf { value -> value.isNotBlank() },
+                                targetAreaGroup = json.optString("targetAreaGroup")
+                                    .takeIf { value -> value.isNotBlank() && value != "null" }
+                            )
+                        }
+                    }
+
+                    "emergency_broadcast_ended" -> {
+                        notifyListeners {
+                            it.onEmergencyBroadcastEnded(
+                                broadcastId = json.optString("broadcastId"),
+                                reason = json.optString("reason").takeIf { value -> value.isNotBlank() }
                             )
                         }
                     }

@@ -38,6 +38,7 @@ object WalkieTalkieManager {
     private const val CHANNEL_ID = 1
 
     private const val MAGIC_1 = 0xAA.toByte()
+
     private const val MAGIC_2 = 0x55.toByte()
     private const val TYPE_AUDIO = 0x02.toByte()
     private const val CODEC_OPUS = 0x02.toByte()

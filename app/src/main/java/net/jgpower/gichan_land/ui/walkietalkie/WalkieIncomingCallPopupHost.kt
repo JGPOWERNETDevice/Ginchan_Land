@@ -34,6 +34,20 @@ fun WalkieIncomingCallPopupHost(
         return
     }
 
+    if (WalkieGlobalState.isEmergencyBroadcastActive.value) {
+        AlertDialog(
+            onDismissRequest = {},
+            title = { Text("긴급 전파 수신") },
+            text = { Text("중앙관제 긴급 전파를 수신 중입니다. 무전기 화면에서 방송을 확인하세요.") },
+            confirmButton = {
+                Button(onClick = onOpenWalkie) {
+                    Text("무전기 화면")
+                }
+            }
+        )
+        return
+    }
+
     val calls = WalkieGlobalState.pendingIncomingCalls
     if (calls.isEmpty()) return
 

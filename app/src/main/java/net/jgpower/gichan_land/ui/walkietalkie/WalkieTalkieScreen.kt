@@ -108,7 +108,7 @@ fun WalkieTalkieScreen(
 
     val pendingIncomingCalls = WalkieGlobalState.pendingIncomingCalls
     val missedCallItems = WalkieMissedCallState.items
-
+    var isEmergencyBroadcastActive by WalkieGlobalState.isEmergencyBroadcastActive
 
     var callStatusText by WalkieGlobalState.lastStatusText
     var peerEndedDialogText by remember { mutableStateOf<String?>(null) }
@@ -155,6 +155,7 @@ fun WalkieTalkieScreen(
             "self_ended" -> "통화 종료됨"
             "peer_ended" -> "상대방이 통화를 종료했습니다."
             "peer_disconnected" -> "상대방 연결이 끊어졌습니다."
+            "emergency" -> "긴급 전파 수신으로 통화 종료"
             else -> "통화 종료됨"
         }
     }
@@ -318,6 +319,11 @@ fun WalkieTalkieScreen(
     fun startMicNow() {
         val callId = activeCallId
 
+        if (isEmergencyBroadcastActive) {
+            errorMessage = "긴급 전파 수신 중에는 MIC를 사용할 수 없습니다."
+            return
+        }
+
         if (!isCallActive || callId.isNullOrBlank()) {
             errorMessage = "먼저 통화를 연결하세요."
             return
@@ -364,6 +370,7 @@ fun WalkieTalkieScreen(
 
             val me = list.firstOrNull { it.workerId?.trim() == currentWorkerId }
             myAreaGroup = me?.areaGroup?.trim()
+            WalkieSignalingClient.updateWorkerInfo(myAreaGroup)
 
             if (selectedTarget == null && !myAreaGroup.isNullOrBlank()) {
                 selectGroupAll()
@@ -426,7 +433,7 @@ fun WalkieTalkieScreen(
                 fromName: String?,
                 fromAreaGroup: String?
             ) {
-                if (isCallActive || activeCallId != null) {
+                if (isEmergencyBroadcastActive || isCallActive || activeCallId != null) {
                     WalkieSignalingClient.rejectCall(
                         callId = callId,
                         workerId = currentWorkerId
@@ -514,6 +521,27 @@ fun WalkieTalkieScreen(
                 } else if (pendingIncomingCalls.isNotEmpty()) {
                     callStatusText = "${pendingIncomingCalls.size}건 연결 요청"
                 }
+            }
+
+            override fun onEmergencyBroadcastStarted(
+                broadcastId: String,
+                fromWorkerId: String,
+                targetType: String?,
+                targetAreaGroup: String?
+            ) {
+                stopMicNow()
+                WalkieGlobalState.startEmergencyBroadcast(
+                    broadcastId = broadcastId,
+                    fromWorkerId = fromWorkerId,
+                    targetType = targetType,
+                    targetAreaGroup = targetAreaGroup
+                )
+                callStatusText = "긴급 전파 수신 중"
+            }
+
+            override fun onEmergencyBroadcastEnded(broadcastId: String, reason: String?) {
+                WalkieGlobalState.endEmergencyBroadcast("긴급 전파 종료")
+                callStatusText = "긴급 전파 종료"
             }
 
             override fun onMicState(callId: String, workerId: String, micOn: Boolean) {
@@ -635,6 +663,32 @@ fun WalkieTalkieScreen(
                     text = it,
                     color = MaterialTheme.colorScheme.error
                 )
+            }
+
+            if (isEmergencyBroadcastActive) {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(16.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.errorContainer
+                    )
+                ) {
+                    Column(
+                        modifier = Modifier.padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Text(
+                            text = "긴급 전파 수신 중",
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onErrorContainer
+                        )
+                        Text(
+                            text = "중앙관제 방송을 수신 중입니다. 이 동안 MIC 송신과 1:1 연결 요청은 비활성화됩니다.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onErrorContainer
+                        )
+                    }
+                }
             }
 
 
@@ -802,7 +856,7 @@ fun WalkieTalkieScreen(
                                                 )
                                                 callStatusText = "${missed.fromWorkerId} 수신 요청 중..."
                                             },
-                                            enabled = activeCallId == null && pendingIncomingCalls.isEmpty()
+                                            enabled = !isEmergencyBroadcastActive && activeCallId == null && pendingIncomingCalls.isEmpty()
                                         ) {
                                             Text("다시 연결")
                                         }
@@ -899,7 +953,7 @@ fun WalkieTalkieScreen(
                                     onCheckedChange = {
                                         if (activeCallId == null && pendingIncomingCalls.isEmpty()) toggleWorker(worker)
                                     },
-                                    enabled = activeCallId == null && pendingIncomingCalls.isEmpty()
+                                    enabled = !isEmergencyBroadcastActive && activeCallId == null && pendingIncomingCalls.isEmpty()
                                 )
 
                                 Text(text = "${workerDisplayName(worker)} (${workerDisplayId(worker)})")
@@ -916,6 +970,11 @@ fun WalkieTalkieScreen(
                         Button(
                             onClick = {
                                 val target = selectedTarget
+
+                                if (isEmergencyBroadcastActive) {
+                                    errorMessage = "긴급 전파 수신 중에는 연결 요청을 보낼 수 없습니다."
+                                    return@Button
+                                }
 
                                 if (target == null) {
                                     errorMessage = "연결 대상을 선택하세요."
@@ -950,14 +1009,14 @@ fun WalkieTalkieScreen(
                                     "$targetWorkerId 수신 요청 중..."
                                 }
                             },
-                            enabled = activeCallId == null && pendingIncomingCalls.isEmpty()
+                            enabled = !isEmergencyBroadcastActive && activeCallId == null && pendingIncomingCalls.isEmpty()
                         ) {
                             Text("연결 요청")
                         }
 
                         OutlinedButton(
                             onClick = { endCurrentCall() },
-                            enabled = activeCallId != null
+                            enabled = activeCallId != null && !isEmergencyBroadcastActive
                         ) {
                             Text("통화 종료")
                         }
@@ -974,6 +1033,11 @@ fun WalkieTalkieScreen(
                 Button(
                     onClick = {
                         val callId = activeCallId
+
+                        if (isEmergencyBroadcastActive) {
+                            errorMessage = "긴급 전파 수신 중에는 MIC를 사용할 수 없습니다."
+                            return@Button
+                        }
 
                         if (!isCallActive || callId.isNullOrBlank()) {
                             errorMessage = "먼저 통화를 연결하세요."
@@ -995,7 +1059,7 @@ fun WalkieTalkieScreen(
                             }
                         }
                     },
-                    enabled = isCallActive,
+                    enabled = isCallActive && !isEmergencyBroadcastActive,
                     modifier = Modifier
                         .size(140.dp)
                         .clip(CircleShape)
@@ -1030,6 +1094,7 @@ fun WalkieTalkieScreen(
 
             Text(
                 text = when {
+                    isEmergencyBroadcastActive -> "긴급 전파 수신 중입니다. 중앙관제 음성만 수신합니다."
                     activeCallId == null -> "대상을 선택한 후 연결 요청을 보내세요."
                     isMicOn -> "내 MIC가 켜져 있습니다. 다시 누르면 꺼집니다."
                     else -> "통화 연결됨. MIC 버튼을 눌러 자유롭게 송신하세요."

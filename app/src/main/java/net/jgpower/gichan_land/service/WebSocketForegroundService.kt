@@ -18,6 +18,7 @@ import net.jgpower.gichan_land.data.walkie.WalkieMissedCallState
 import net.jgpower.gichan_land.network.AppWebSocketManager
 import net.jgpower.gichan_land.network.ServerConfig
 import net.jgpower.gichan_land.network.WalkieSignalingClient
+import net.jgpower.gichan_land.network.WalkieTalkieManager
 
 class WebSocketForegroundService : Service() {
 
@@ -216,6 +217,36 @@ class WebSocketForegroundService : Service() {
                         }
                         WalkieGlobalState.clearCall(callEndedStatusText(reason))
                     }
+                }
+
+                override fun onEmergencyBroadcastStarted(
+                    broadcastId: String,
+                    fromWorkerId: String,
+                    targetType: String?,
+                    targetAreaGroup: String?
+                ) {
+                    WalkieTalkieManager.stopTransmit()
+                    WalkieGlobalState.startEmergencyBroadcast(
+                        broadcastId = broadcastId,
+                        fromWorkerId = fromWorkerId,
+                        targetType = targetType,
+                        targetAreaGroup = targetAreaGroup
+                    )
+
+                    if (!AppVisibilityState.isForeground.value) {
+                        AppNotificationManager.showEmergencyBroadcastNotification(
+                            context = applicationContext,
+                            broadcastId = broadcastId,
+                            fromWorkerId = fromWorkerId,
+                            targetType = targetType,
+                            targetAreaGroup = targetAreaGroup
+                        )
+                    }
+                }
+
+                override fun onEmergencyBroadcastEnded(broadcastId: String, reason: String?) {
+                    WalkieGlobalState.endEmergencyBroadcast("긴급 전파 종료")
+                    AppNotificationManager.cancelEmergencyBroadcastNotification(applicationContext, broadcastId)
                 }
 
                 override fun onMicState(callId: String, workerId: String, micOn: Boolean) = Unit
