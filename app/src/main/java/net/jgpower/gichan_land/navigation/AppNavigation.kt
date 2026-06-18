@@ -1,6 +1,10 @@
 package net.jgpower.gichan_land.navigation
 
+import android.app.Activity
+import android.content.Context
+import android.content.ContextWrapper
 import android.content.Intent
+import android.os.Process
 import android.util.Log
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -33,6 +37,7 @@ import net.jgpower.gichan_land.ui.walkietalkie.WalkieTalkieScreen
 import net.jgpower.gichan_land.ui.walkietalkie.WalkieIncomingCallPopupHost
 import kotlinx.coroutines.delay
 import net.jgpower.gichan_land.network.WalkieTalkieManager
+import net.jgpower.gichan_land.network.WalkieSignalingClient
 
 object Routes {
     const val SIGN_IN = "sign_in"
@@ -54,6 +59,7 @@ fun AppNavigation(
 ) {
     val context = LocalContext.current
     val appContext = context.applicationContext
+    val activity = context.findActivity()
     val loginDataStore = remember { LoginDataStore(context) }
     val lifecycleOwner = LocalLifecycleOwner.current
 
@@ -268,6 +274,7 @@ fun AppNavigation(
                         try {
                             stopWebSocketService()
                             AppWebSocketManager.disconnect()
+                            WalkieSignalingClient.disconnect()
                             WalkieTalkieManager.stop()
 
                             if (workerId.isNotBlank()) {
@@ -283,6 +290,26 @@ fun AppNavigation(
 
                             AppAlertPopupState.clear()
                             TextAlertState.clear()
+                        }
+                    }
+                },
+                onExitAppClick = {
+                    Log.d("WS_NAV", "onExitAppClick workerId=${loginWorkerId.value}")
+
+                    coroutineScope.launch {
+                        try {
+                            stopWebSocketService()
+                            AppWebSocketManager.disconnect()
+                            WalkieSignalingClient.disconnect()
+                            WalkieTalkieManager.stop()
+                            AppVisibilityState.setForeground(false)
+                            AppAlertPopupState.clear()
+                            TextAlertState.clear()
+                        } catch (e: Exception) {
+                            Log.e("WS_NAV", "exit app cleanup failed", e)
+                        } finally {
+                            activity?.finishAndRemoveTask() ?: activity?.finish()
+                            Process.killProcess(Process.myPid())
                         }
                     }
                 }
@@ -357,4 +384,10 @@ fun AppNavigation(
             }
         )
     }
+}
+
+private tailrec fun Context.findActivity(): Activity? = when (this) {
+    is Activity -> this
+    is ContextWrapper -> baseContext.findActivity()
+    else -> null
 }

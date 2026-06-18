@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.lazy.LazyColumn
@@ -53,7 +54,8 @@ fun MainScreen(
     onCreateEventClick: () -> Unit,
     onNoticeClick: () -> Unit,
     onWalkieTalkieClick: () -> Unit,
-    onLogoutClick: () -> Unit
+    onLogoutClick: () -> Unit,
+    onExitAppClick: () -> Unit
 ) {
     BackHandler {
         // 메인 화면에서는 뒤로가기 버튼으로 앱 종료 방지
@@ -237,12 +239,39 @@ fun MainScreen(
                 )
             }
 
-            OutlinedButton(
-                onClick = {
-                    onLogoutClick()
-                }
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Text("로그아웃")
+                OutlinedButton(
+                    onClick = {
+                        onLogoutClick()
+                    },
+                    modifier = Modifier
+                        .height(36.dp)
+                        .widthIn(min = 72.dp)
+                ) {
+                    Text(
+                        text = "로그아웃",
+                        style = MaterialTheme.typography.labelSmall,
+                        maxLines = 1
+                    )
+                }
+
+                OutlinedButton(
+                    onClick = {
+                        onExitAppClick()
+                    },
+                    modifier = Modifier
+                        .height(36.dp)
+                        .widthIn(min = 72.dp)
+                ) {
+                    Text(
+                        text = "앱 종료",
+                        style = MaterialTheme.typography.labelSmall,
+                        maxLines = 1
+                    )
+                }
             }
         }
 
