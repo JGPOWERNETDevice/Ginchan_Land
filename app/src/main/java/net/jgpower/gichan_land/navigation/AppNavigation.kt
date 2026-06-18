@@ -1,5 +1,25 @@
 package net.jgpower.gichan_land.navigation
 
+import net.jgpower.gichan_land.data.walkie.WalkieGlobalState
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.Alignment
+import androidx.compose.material3.Text
+import androidx.compose.material3.Surface
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Button
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Arrangement
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.activity.compose.rememberLauncherForActivityResult
+import android.content.pm.PackageManager
+import android.Manifest
 import android.app.Activity
 import android.content.Context
 import android.content.ContextWrapper
@@ -222,11 +242,69 @@ fun AppNavigation(
     }
 
     if (isCheckingLogin.value) {
-        androidx.compose.material3.Text("로그인 상태 확인 중...")
+        Text("로그인 상태 확인 중...")
         return
     }
 
-    when (currentRoute.value) {
+    fun startMicFromTopBar() {
+        if (!WalkieGlobalState.isCallActive.value || WalkieGlobalState.activeCallId.value.isNullOrBlank()) {
+            WalkieGlobalState.lastStatusText.value = "먼저 통화를 연결하세요."
+            return
+        }
+
+        val started = WalkieTalkieManager.startTransmit(context)
+        WalkieGlobalState.isMicOn.value = started
+        WalkieGlobalState.lastStatusText.value = if (started) "내 MIC ON" else "송신 시작 실패"
+    }
+
+    val micPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) {
+            startMicFromTopBar()
+        } else {
+            WalkieGlobalState.lastStatusText.value = "마이크 권한이 필요합니다."
+        }
+    }
+
+    fun toggleMicFromTopBar() {
+        if (WalkieGlobalState.isMicOn.value) {
+            WalkieTalkieManager.stopTransmit()
+            WalkieGlobalState.isMicOn.value = false
+            WalkieGlobalState.lastStatusText.value = "통화 연결됨"
+            return
+        }
+
+        val granted = ContextCompat.checkSelfPermission(
+            context,
+            Manifest.permission.RECORD_AUDIO
+        ) == PackageManager.PERMISSION_GRANTED
+
+        if (granted) {
+            startMicFromTopBar()
+        } else {
+            micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+        }
+    }
+
+    fun endCallFromTopBar() {
+        val callId = WalkieGlobalState.activeCallId.value
+        val workerId = loginWorkerId.value
+
+        if (!callId.isNullOrBlank() && workerId.isNotBlank()) {
+            WalkieSignalingClient.endCall(
+                callId = callId,
+                workerId = workerId
+            )
+        }
+
+        WalkieTalkieManager.stopTransmit()
+        WalkieGlobalState.isMicOn.value = false
+        WalkieGlobalState.clearCall("통화 종료됨")
+    }
+
+    Box(modifier = Modifier.fillMaxSize()) {
+        when (currentRoute.value) {
         Routes.SIGN_IN -> {
             SignInScreen(
                 onLoginSuccess = { workerId ->
@@ -370,19 +448,78 @@ fun AppNavigation(
         }
     }
 
-    if (
-        loginWorkerId.value.isNotBlank() &&
-        currentRoute.value != Routes.SIGN_IN
-    ) {
-        AppAlertPopupHost()
 
-        WalkieIncomingCallPopupHost(
-            workerId = loginWorkerId.value,
-            enabled = currentRoute.value != Routes.WALKIE_TALKIE,
-            onOpenWalkie = {
-                currentRoute.value = Routes.WALKIE_TALKIE
+        if (
+            loginWorkerId.value.isNotBlank() &&
+            currentRoute.value != Routes.SIGN_IN
+        ) {
+            AppAlertPopupHost()
+
+            WalkieIncomingCallPopupHost(
+                workerId = loginWorkerId.value,
+                enabled = currentRoute.value != Routes.WALKIE_TALKIE,
+                onOpenWalkie = {
+                    currentRoute.value = Routes.WALKIE_TALKIE
+                }
+            )
+        }
+    }
+}
+
+@Composable
+private fun WalkieActiveCallTopBar(
+    visible: Boolean,
+    onOpenWalkie: () -> Unit,
+    onToggleMic: () -> Unit,
+    onEndCall: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val callId = WalkieGlobalState.activeCallId.value
+    val isCallActive = WalkieGlobalState.isCallActive.value
+    val isEmergencyBroadcastActive = WalkieGlobalState.isEmergencyBroadcastActive.value
+
+    if (!visible || !isCallActive || callId.isNullOrBlank() || isEmergencyBroadcastActive) {
+        return
+    }
+
+    val peerWorkerId = WalkieGlobalState.activePeerWorkerId.value ?: "상대"
+    val isMicOn = WalkieGlobalState.isMicOn.value
+
+    Surface(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(horizontal = 8.dp, vertical = 6.dp),
+        tonalElevation = 6.dp,
+        shadowElevation = 6.dp,
+        color = MaterialTheme.colorScheme.primaryContainer
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 10.dp, vertical = 8.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "통화중: $peerWorkerId / MIC ${if (isMicOn) "ON" else "OFF"}",
+                modifier = Modifier.weight(1f),
+                color = MaterialTheme.colorScheme.onPrimaryContainer,
+                fontWeight = FontWeight.Bold,
+                style = MaterialTheme.typography.bodySmall
+            )
+
+            OutlinedButton(onClick = onOpenWalkie) {
+                Text("무전기")
             }
-        )
+
+            OutlinedButton(onClick = onToggleMic) {
+                Text(if (isMicOn) "MIC OFF" else "MIC ON")
+            }
+
+            Button(onClick = onEndCall) {
+                Text("통화 종료")
+            }
+        }
     }
 }
 

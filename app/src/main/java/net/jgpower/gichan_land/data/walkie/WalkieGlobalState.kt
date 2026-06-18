@@ -23,6 +23,7 @@ object WalkieGlobalState {
     val activeCallId = mutableStateOf<String?>(null)
     val activePeerWorkerId = mutableStateOf<String?>(null)
     val isCallActive = mutableStateOf(false)
+    val isMicOn = mutableStateOf(false)
     val lastStatusText = mutableStateOf("대기 중")
     val showPeerEndedPopup = mutableStateOf(false)
     val isEmergencyBroadcastActive = mutableStateOf(false)
@@ -68,6 +69,7 @@ object WalkieGlobalState {
         activeCallId.value = callId
         activePeerWorkerId.value = toWorkerId
         isCallActive.value = false
+        isMicOn.value = false
         lastStatusText.value = "$toWorkerId 수신 요청 중..."
     }
 
@@ -89,6 +91,7 @@ object WalkieGlobalState {
         activePeerWorkerId.value = null
         isCallActive.value = false
         pendingIncomingCalls.clear()
+        isMicOn.value = false
         isEmergencyBroadcastActive.value = true
         emergencyBroadcast.value = EmergencyBroadcastState(
             broadcastId = broadcastId,
@@ -111,6 +114,7 @@ object WalkieGlobalState {
         activeCallId.value = null
         activePeerWorkerId.value = null
         isCallActive.value = false
+        isMicOn.value = false
         pendingIncomingCalls.clear()
         lastStatusText.value = message
     }

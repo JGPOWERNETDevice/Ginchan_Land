@@ -64,6 +64,7 @@ import net.jgpower.gichan_land.data.walkie.WalkieTargetType
 import net.jgpower.gichan_land.network.ApiServiceManager
 import net.jgpower.gichan_land.network.WalkieSignalingClient
 import net.jgpower.gichan_land.network.WalkieTalkieManager
+import net.jgpower.gichan_land.service.WebSocketForegroundService
 
 private const val MONITOR_WORKER_ID = "monitor"
 private const val MONITOR_NAME = "중앙관제"
@@ -101,7 +102,7 @@ fun WalkieTalkieScreen(
     var isGroupSelected by remember { mutableStateOf(true) }
     var selectedTarget by remember { mutableStateOf<WalkieTarget?>(null) }
 
-    var isMicOn by remember { mutableStateOf(false) }
+    var isMicOn by WalkieGlobalState.isMicOn
     var activeCallId by WalkieGlobalState.activeCallId
     var isCallActive by WalkieGlobalState.isCallActive
     var activePeerWorkerId by WalkieGlobalState.activePeerWorkerId
@@ -295,6 +296,7 @@ fun WalkieTalkieScreen(
         isMicOn = false
         callStatusText = message
         WalkieTalkieManager.stopTransmit()
+        WebSocketForegroundService.refreshWalkieNotification(context)
     }
 
     fun endCurrentCall() {
@@ -313,6 +315,12 @@ fun WalkieTalkieScreen(
     fun exitScreen() {
         endCurrentCall()
         WalkieTalkieManager.stopTransmit()
+        onBackClick()
+    }
+
+    fun leaveScreenWithoutEndingCall() {
+        // 화면만 벗어나고 통화 상태는 유지합니다.
+        // 기존처럼 call_end를 보내지 않으므로 상대방과의 1:1 연결이 끊기지 않습니다.
         onBackClick()
     }
 
@@ -338,15 +346,17 @@ fun WalkieTalkieScreen(
             } else {
                 "송신 시작 실패"
             }
+        WebSocketForegroundService.refreshWalkieNotification(context)
     }
 
     fun stopMicNow() {
         WalkieTalkieManager.stopTransmit()
         isMicOn = false
         callStatusText = "통화 연결됨"
+        WebSocketForegroundService.refreshWalkieNotification(context)
     }
 
-    BackHandler { exitScreen() }
+    BackHandler { leaveScreenWithoutEndingCall() }
 
     val micPermissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -474,6 +484,7 @@ fun WalkieTalkieScreen(
                 pendingIncomingCalls.clear()
                 callStatusText = "통화 연결됨"
                 setTargetForPeer(peerWorkerId)
+                WebSocketForegroundService.refreshWalkieNotification(context)
             }
 
             override fun onCallRejected(callId: String, byWorkerId: String?) {
@@ -574,7 +585,8 @@ fun WalkieTalkieScreen(
 
     DisposableEffect(Unit) {
         onDispose {
-            WalkieTalkieManager.stopTransmit()
+            // 화면을 벗어나도 통화와 MIC 송신 상태는 유지합니다.
+            // 실제 종료는 통화 종료 버튼, 긴급 전파, 로그아웃/앱 종료에서만 처리합니다.
             WalkieSignalingClient.listener = null
         }
     }
@@ -618,7 +630,7 @@ fun WalkieTalkieScreen(
                 title = { Text("무전기") },
                 navigationIcon = {
                     OutlinedButton(
-                        onClick = { exitScreen() },
+                        onClick = { leaveScreenWithoutEndingCall() },
                         modifier = Modifier.padding(start = 8.dp)
                     ) {
                         Text("뒤로")
