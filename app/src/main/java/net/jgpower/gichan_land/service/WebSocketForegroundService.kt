@@ -26,6 +26,7 @@ import net.jgpower.gichan_land.network.AppWebSocketManager
 import net.jgpower.gichan_land.network.ServerConfig
 import net.jgpower.gichan_land.network.WalkieSignalingClient
 import net.jgpower.gichan_land.network.WalkieTalkieManager
+import net.jgpower.gichan_land.watch.TWatchBleNotifier
 import kotlin.concurrent.thread
 import kotlinx.coroutines.runBlocking
 
@@ -112,6 +113,8 @@ class WebSocketForegroundService : Service() {
             return START_NOT_STICKY
         }
 
+        TWatchBleNotifier.start(applicationContext)
+
         try {
             AppWebSocketManager.connect(
                 workerId = workerId,
@@ -191,6 +194,12 @@ class WebSocketForegroundService : Service() {
                     fromAreaGroup: String?
                 ) {
                     WalkieGlobalState.upsertIncomingCall(
+                        callId = callId,
+                        fromWorkerId = fromWorkerId,
+                        fromName = fromName,
+                        fromAreaGroup = fromAreaGroup
+                    )
+                    TWatchBleNotifier.notifyWalkieCall(
                         callId = callId,
                         fromWorkerId = fromWorkerId,
                         fromName = fromName,
@@ -290,6 +299,11 @@ class WebSocketForegroundService : Service() {
                     WalkieGlobalState.startEmergencyBroadcast(
                         broadcastId = broadcastId,
                         fromWorkerId = fromWorkerId,
+                        targetType = targetType,
+                        targetAreaGroup = targetAreaGroup
+                    )
+                    TWatchBleNotifier.notifyEmergencyBroadcast(
+                        broadcastId = broadcastId,
                         targetType = targetType,
                         targetAreaGroup = targetAreaGroup
                     )

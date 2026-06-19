@@ -12,6 +12,7 @@ import net.jgpower.gichan_land.data.emergency.EmergencyPresenceState
 import net.jgpower.gichan_land.data.textalert.TextAlert
 import net.jgpower.gichan_land.data.textalert.TextAlertState
 import net.jgpower.gichan_land.service.AppNotificationManager
+import net.jgpower.gichan_land.watch.TWatchBleNotifier
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.WebSocket
@@ -116,6 +117,12 @@ object AppWebSocketManager {
                                 )
 
                                 if (safetyAlert.alertId.isNotBlank()) {
+                                    TWatchBleNotifier.notifySafetyAlert(
+                                        alertId = safetyAlert.alertId,
+                                        message = safetyAlert.message,
+                                        occurredAt = safetyAlert.occurredAt
+                                    )
+
                                     AppAlertPopupState.enqueueSafety(safetyAlert)
 
                                     if (!AppVisibilityState.isForeground.value) {
@@ -141,6 +148,12 @@ object AppWebSocketManager {
                                 )
 
                                 if (textAlert.textAlertId.isNotBlank()) {
+                                    TWatchBleNotifier.notifyTextAlert(
+                                        textAlertId = textAlert.textAlertId,
+                                        message = textAlert.message,
+                                        createdAt = textAlert.createdAt
+                                    )
+
                                     TextAlertState.addAlert(textAlert)
                                     AppAlertPopupState.enqueueText(textAlert)
 

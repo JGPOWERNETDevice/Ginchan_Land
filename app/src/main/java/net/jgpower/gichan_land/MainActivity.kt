@@ -21,6 +21,7 @@ import net.jgpower.gichan_land.network.ApiServiceManager
 import net.jgpower.gichan_land.network.AppWebSocketManager
 import net.jgpower.gichan_land.service.AppNotificationManager
 import net.jgpower.gichan_land.ui.theme.Gichan_LandTheme
+import net.jgpower.gichan_land.watch.TWatchBleNotifier
 
 class MainActivity : ComponentActivity() {
 
@@ -49,9 +50,9 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private val notificationPermissionLauncher =
-        registerForActivityResult(ActivityResultContracts.RequestPermission()) {
-            // 허용/거부 결과는 지금 단계에서는 별도 처리하지 않음
+    private val appPermissionLauncher =
+        registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
+            TWatchBleNotifier.start(applicationContext)
         }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -61,7 +62,8 @@ class MainActivity : ComponentActivity() {
         registerNetworkCallback()
 
         AppNotificationManager.createChannel(this)
-        requestNotificationPermissionIfNeeded()
+        requestAppPermissionsIfNeeded()
+        TWatchBleNotifier.start(applicationContext)
         readIntent(intent)
 
         configureSystemBars()
@@ -143,9 +145,22 @@ class MainActivity : ComponentActivity() {
         startWorkerId.value = intent?.getStringExtra("workerId")
     }
 
-    private fun requestNotificationPermissionIfNeeded() {
+    private fun requestAppPermissionsIfNeeded() {
+        val permissions = mutableListOf<String>()
+
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+            permissions += Manifest.permission.POST_NOTIFICATIONS
+        }
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            permissions += Manifest.permission.BLUETOOTH_SCAN
+            permissions += Manifest.permission.BLUETOOTH_CONNECT
+        } else {
+            permissions += Manifest.permission.ACCESS_FINE_LOCATION
+        }
+
+        if (permissions.isNotEmpty()) {
+            appPermissionLauncher.launch(permissions.toTypedArray())
         }
     }
 }
