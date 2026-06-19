@@ -27,6 +27,12 @@ object WalkieSignalingClient {
     private var currentWorkerId: String? = null
     private var currentAreaGroup: String? = null
 
+    @Volatile
+    private var isConnectedFlag: Boolean = false
+
+    @Volatile
+    private var isConnectingFlag: Boolean = false
+
     var listener: Listener? = null
     private var backgroundListener: Listener? = null
 
@@ -90,6 +96,14 @@ object WalkieSignalingClient {
         fun onError(message: String)
     }
 
+    fun isConnected(): Boolean {
+        return isConnectedFlag && webSocket != null
+    }
+
+    fun isConnecting(): Boolean {
+        return isConnectingFlag
+    }
+
     fun connect(
         serverBaseUrl: String,
         workerId: String,
@@ -100,6 +114,16 @@ object WalkieSignalingClient {
             currentAreaGroup = areaGroup
         }
 
+        if (isConnectedFlag && webSocket != null && currentWorkerId == workerId) {
+            Log.d(TAG, "connect skipped. already connected workerId=$workerId")
+            return
+        }
+
+        if (isConnectingFlag && currentWorkerId == workerId) {
+            Log.d(TAG, "connect skipped. already connecting workerId=$workerId")
+            return
+        }
+
         val wsUrl =
             serverBaseUrl
                 .replace("https://", "wss://")
@@ -107,6 +131,7 @@ object WalkieSignalingClient {
                 .trimEnd('/') + "/ws/walkie-app"
 
         disconnect(sendDisconnect = false)
+        isConnectingFlag = true
 
         val request = Request.Builder()
             .url(wsUrl)
@@ -118,6 +143,8 @@ object WalkieSignalingClient {
                 override fun onOpen(webSocket: WebSocket, response: Response) {
                     Log.d(TAG, "connected $wsUrl")
                     this@WalkieSignalingClient.webSocket = webSocket
+                    isConnectedFlag = true
+                    isConnectingFlag = false
 
                     val connectJson = JSONObject()
                         .put("type", "connect")
@@ -140,16 +167,27 @@ object WalkieSignalingClient {
 
                 override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
                     Log.d(TAG, "closed code=$code reason=$reason")
+                    if (this@WalkieSignalingClient.webSocket == webSocket) {
+                        this@WalkieSignalingClient.webSocket = null
+                    }
+                    isConnectedFlag = false
+                    isConnectingFlag = false
                     post { notifyListeners { it.onDisconnected() } }
                 }
 
                 override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
                     Log.d(TAG, "closing code=$code reason=$reason")
+                    isConnectedFlag = false
                     post { notifyListeners { it.onDisconnected() } }
                 }
 
                 override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
                     Log.e(TAG, "failed", t)
+                    if (this@WalkieSignalingClient.webSocket == webSocket) {
+                        this@WalkieSignalingClient.webSocket = null
+                    }
+                    isConnectedFlag = false
+                    isConnectingFlag = false
                     post {
                         notifyListeners { it.onError(t.message ?: "WebSocket error") }
                         notifyListeners { it.onDisconnected() }
@@ -177,6 +215,8 @@ object WalkieSignalingClient {
         }
 
         webSocket = null
+        isConnectedFlag = false
+        isConnectingFlag = false
     }
 
     fun updateWorkerInfo(areaGroup: String?) {
@@ -211,7 +251,16 @@ object WalkieSignalingClient {
         val json = jsonObject.toString()
 
         Log.d(TAG, "send $json")
-        socket.send(json)
+        val sent = socket.send(json)
+        if (!sent) {
+            Log.d(TAG, "ping send failed")
+            if (webSocket === socket) {
+                webSocket = null
+            }
+            isConnectedFlag = false
+            isConnectingFlag = false
+            post { notifyListeners { it.onDisconnected() } }
+        }
     }
 
     fun requestCall(
@@ -367,6 +416,9 @@ object WalkieSignalingClient {
         val sent = webSocket?.send(text) ?: false
         if (!sent) {
             Log.d(TAG, "send failed. socket not connected")
+            isConnectedFlag = false
+            isConnectingFlag = false
+            webSocket = null
         }
     }
 

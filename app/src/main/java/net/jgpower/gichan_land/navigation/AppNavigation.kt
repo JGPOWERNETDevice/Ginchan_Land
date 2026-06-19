@@ -11,6 +11,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Button
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.Row
@@ -41,6 +42,7 @@ import kotlinx.coroutines.launch
 import net.jgpower.gichan_land.data.alert.AppAlertPopupState
 import net.jgpower.gichan_land.data.app.AppVisibilityState
 import net.jgpower.gichan_land.data.datastore.LoginDataStore
+import net.jgpower.gichan_land.data.datastore.PendingLogoutStore
 import net.jgpower.gichan_land.data.textalert.TextAlertState
 import net.jgpower.gichan_land.network.ApiServiceManager
 import net.jgpower.gichan_land.network.AppWebSocketManager
@@ -89,10 +91,6 @@ fun AppNavigation(
     val isCheckingLogin = remember { mutableStateOf(true) }
 
     val coroutineScope = rememberCoroutineScope()
-
-    val authRepository = remember {
-        AuthRepository(ApiServiceManager.apiService)
-    }
 
     fun startWebSocketService(workerId: String) {
         if (workerId.isBlank()) {
@@ -303,7 +301,11 @@ fun AppNavigation(
         WalkieGlobalState.clearCall("통화 종료됨")
     }
 
-    Box(modifier = Modifier.fillMaxSize()) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .systemBarsPadding()
+    ) {
         when (currentRoute.value) {
         Routes.SIGN_IN -> {
             SignInScreen(
@@ -349,18 +351,40 @@ fun AppNavigation(
                     Log.d("WS_NAV", "onLogoutClick workerId=$workerId")
 
                     coroutineScope.launch {
-                        try {
-                            stopWebSocketService()
-                            AppWebSocketManager.disconnect()
-                            WalkieSignalingClient.disconnect()
-                            WalkieTalkieManager.stop()
+                        var serverLogoutSucceeded = workerId.isBlank()
 
+                        try {
                             if (workerId.isNotBlank()) {
-                                authRepository.logout(workerId)
+                                ApiServiceManager.init(appContext)
+                                val response = AuthRepository(ApiServiceManager.apiService).logout(workerId)
+                                serverLogoutSucceeded = response.isSuccessful
+
+                                if (serverLogoutSucceeded) {
+                                    PendingLogoutStore.clearIfMatches(appContext, workerId)
+                                } else {
+                                    PendingLogoutStore.save(appContext, workerId)
+                                    Log.e("WS_NAV", "logout server response failed code=${response.code()}")
+                                }
                             }
                         } catch (e: Exception) {
-                            Log.e("WS_NAV", "logout failed", e)
+                            if (workerId.isNotBlank()) {
+                                PendingLogoutStore.save(appContext, workerId)
+                            }
+                            Log.e("WS_NAV", "logout server request failed", e)
                         } finally {
+                            try {
+                                stopWebSocketService()
+                                AppWebSocketManager.disconnect()
+                                WalkieSignalingClient.disconnect()
+                                WalkieTalkieManager.stop()
+                            } catch (e: Exception) {
+                                Log.e("WS_NAV", "logout local cleanup failed", e)
+                            }
+
+                            if (!serverLogoutSucceeded && workerId.isNotBlank()) {
+                                Log.d("WS_NAV", "pending logout saved workerId=$workerId")
+                            }
+
                             loginDataStore.clearLogin()
                             loginWorkerId.value = ""
                             selectedAlertId.value = ""

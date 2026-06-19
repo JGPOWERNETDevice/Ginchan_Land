@@ -75,7 +75,8 @@ fun NoticeScreen(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .padding(20.dp),
+            .padding(20.dp)
+            .padding(bottom = 32.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         Text(

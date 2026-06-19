@@ -6,21 +6,28 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
 import android.content.Intent
+import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.util.Log
+import android.widget.RemoteViews
 import androidx.core.app.NotificationCompat
 import net.jgpower.gichan_land.MainActivity
 import net.jgpower.gichan_land.R
 import net.jgpower.gichan_land.data.app.AppVisibilityState
 import net.jgpower.gichan_land.data.walkie.WalkieGlobalState
 import net.jgpower.gichan_land.data.walkie.WalkieMissedCallState
+import net.jgpower.gichan_land.data.walkie.WalkieTarget
+import net.jgpower.gichan_land.data.walkie.WalkieTargetType
+import net.jgpower.gichan_land.network.ApiServiceManager
 import net.jgpower.gichan_land.network.AppWebSocketManager
 import net.jgpower.gichan_land.network.ServerConfig
 import net.jgpower.gichan_land.network.WalkieSignalingClient
 import net.jgpower.gichan_land.network.WalkieTalkieManager
+import kotlin.concurrent.thread
+import kotlinx.coroutines.runBlocking
 
 class WebSocketForegroundService : Service() {
 
@@ -30,6 +37,36 @@ class WebSocketForegroundService : Service() {
     private val walkiePingRunnable = object : Runnable {
         override fun run() {
             WalkieSignalingClient.ping()
+            mainHandler.postDelayed(this, 5000L)
+        }
+    }
+
+    private val walkieReconnectRunnable = object : Runnable {
+        override fun run() {
+            val workerId = walkieWorkerId
+            if (!workerId.isNullOrBlank()) {
+                try {
+                    AppWebSocketManager.connect(
+                        workerId = workerId,
+                        context = applicationContext
+                    )
+                } catch (e: Exception) {
+                    Log.e("WS_SERVICE", "app websocket health reconnect failed", e)
+                }
+
+                if (!WalkieSignalingClient.isConnected() && !WalkieSignalingClient.isConnecting()) {
+                    Log.d("WS_SERVICE", "walkie websocket reconnect by health check")
+                    WalkieSignalingClient.connect(
+                        serverBaseUrl = ServerConfig.getBaseHttpUrl(applicationContext),
+                        workerId = workerId
+                    )
+                } else {
+                    WalkieSignalingClient.ping()
+                }
+
+                ensureWalkieReceiverReady(workerId)
+            }
+
             mainHandler.postDelayed(this, 5000L)
         }
     }
@@ -66,10 +103,7 @@ class WebSocketForegroundService : Service() {
         }
 
         try {
-            startForeground(
-                NOTIFICATION_ID,
-                createForegroundNotification()
-            )
+            startForegroundWithMicType(createForegroundNotification())
 
             Log.d("WS_SERVICE", "startForeground success")
         } catch (e: Exception) {
@@ -116,6 +150,7 @@ class WebSocketForegroundService : Service() {
     override fun onDestroy() {
         Log.d("WS_SERVICE", "onDestroy")
         mainHandler.removeCallbacks(walkiePingRunnable)
+        mainHandler.removeCallbacks(walkieReconnectRunnable)
         WalkieSignalingClient.setBackgroundListener(null)
         WalkieSignalingClient.disconnect()
         super.onDestroy()
@@ -141,8 +176,7 @@ class WebSocketForegroundService : Service() {
                 }
 
                 override fun onDisconnected() {
-                    // foreground service가 살아있는 동안 OkHttp/서버 연결이 끊기면
-                    // 다음 서비스 재시작 또는 사용자의 화면 진입 시 다시 연결됩니다.
+                    scheduleWalkieReconnect(workerId)
                 }
 
                 override fun onCallRinging(callId: String, toWorkerId: String) {
@@ -178,6 +212,8 @@ class WebSocketForegroundService : Service() {
 
                 override fun onCallActive(callId: String, peerWorkerId: String, talkerId: String?) {
                     WalkieGlobalState.setActive(callId, peerWorkerId)
+                    setWalkieTargetForPeer(peerWorkerId)
+                    ensureWalkieReceiverReady(workerId)
                     updateForegroundNotification()
                 }
 
@@ -288,6 +324,7 @@ class WebSocketForegroundService : Service() {
 
                 override fun onError(message: String) {
                     Log.d("WS_SERVICE", "walkie signaling error=$message")
+                    scheduleWalkieReconnect(workerId)
                 }
             }
         )
@@ -297,8 +334,81 @@ class WebSocketForegroundService : Service() {
             workerId = workerId
         )
 
+        ensureWalkieReceiverReady(workerId)
+
         mainHandler.removeCallbacks(walkiePingRunnable)
-        mainHandler.postDelayed(walkiePingRunnable, 5000L)
+        mainHandler.removeCallbacks(walkieReconnectRunnable)
+        mainHandler.postDelayed(walkieReconnectRunnable, 5000L)
+    }
+
+
+    private fun scheduleWalkieReconnect(workerId: String) {
+        if (workerId.isBlank()) return
+        mainHandler.postDelayed({
+            if (!WalkieSignalingClient.isConnected() && !WalkieSignalingClient.isConnecting()) {
+                Log.d("WS_SERVICE", "walkie websocket reconnect scheduled")
+                WalkieSignalingClient.connect(
+                    serverBaseUrl = ServerConfig.getBaseHttpUrl(applicationContext),
+                    workerId = workerId
+                )
+            }
+        }, 1500L)
+    }
+
+    private fun ensureWalkieReceiverReady(workerId: String, afterReady: (() -> Unit)? = null) {
+        if (workerId.isBlank()) return
+
+        if (WalkieTalkieManager.isStarted()) {
+            afterReady?.invoke()
+            return
+        }
+
+        thread(name = "walkie-audio-init") {
+            var started = false
+            try {
+                ApiServiceManager.init(applicationContext)
+                val workers = runBlocking { ApiServiceManager.apiService.getOnlineWorkers() }
+                val areaGroup = workers.firstOrNull { it.workerId?.trim() == workerId }
+                    ?.areaGroup
+                    ?.trim()
+
+                if (!areaGroup.isNullOrBlank()) {
+                    WalkieTalkieManager.start(
+                        context = applicationContext,
+                        workerId = workerId,
+                        areaGroup = areaGroup
+                    )
+                    started = true
+                    Log.d("WS_SERVICE", "walkie receiver ready workerId=$workerId areaGroup=$areaGroup")
+                } else {
+                    Log.d("WS_SERVICE", "walkie receiver ready failed. areaGroup not found workerId=$workerId")
+                }
+            } catch (e: Exception) {
+                Log.e("WS_SERVICE", "ensureWalkieReceiverReady failed", e)
+            }
+
+            if (started && afterReady != null) {
+                mainHandler.post { afterReady.invoke() }
+            } else if (!started && afterReady != null) {
+                mainHandler.post {
+                    WalkieGlobalState.lastStatusText.value = "MIC 준비 실패"
+                    updateForegroundNotification()
+                }
+            }
+        }
+    }
+
+    private fun setWalkieTargetForPeer(peerWorkerId: String) {
+        if (peerWorkerId.isBlank()) return
+
+        WalkieTalkieManager.setTarget(
+            WalkieTarget(
+                targetType = WalkieTargetType.USER,
+                targetWorkerId = peerWorkerId,
+                targetWorkerName = peerWorkerId,
+                targetAreaGroup = null
+            )
+        )
     }
 
     private fun handleWalkieNotificationAction(action: String?) {
@@ -323,12 +433,47 @@ class WebSocketForegroundService : Service() {
             WalkieTalkieManager.stopTransmit()
             WalkieGlobalState.isMicOn.value = false
             WalkieGlobalState.lastStatusText.value = "통화 연결됨"
-        } else {
-            val started = WalkieTalkieManager.startTransmit(applicationContext)
-            WalkieGlobalState.isMicOn.value = started
-            WalkieGlobalState.lastStatusText.value = if (started) "내 MIC ON" else "송신 시작 실패"
+            updateForegroundNotification()
+            return
         }
 
+        startMicFromNotificationAfterReady()
+    }
+
+    private fun startMicFromNotificationAfterReady() {
+        val workerId = walkieWorkerId
+        val peerWorkerId = WalkieGlobalState.activePeerWorkerId.value
+
+        if (workerId.isNullOrBlank() || peerWorkerId.isNullOrBlank()) {
+            WalkieGlobalState.lastStatusText.value = "송신 준비 실패"
+            updateForegroundNotification()
+            return
+        }
+
+        setWalkieTargetForPeer(peerWorkerId)
+
+        if (!WalkieTalkieManager.isStarted()) {
+            WalkieGlobalState.lastStatusText.value = "MIC 준비 중"
+            updateForegroundNotification()
+            ensureWalkieReceiverReady(workerId) {
+                tryStartMicFromNotification()
+            }
+            return
+        }
+
+        tryStartMicFromNotification()
+    }
+
+    private fun tryStartMicFromNotification() {
+        val peerWorkerId = WalkieGlobalState.activePeerWorkerId.value
+        if (!peerWorkerId.isNullOrBlank()) {
+            setWalkieTargetForPeer(peerWorkerId)
+        }
+
+        ensureForegroundForMic()
+        val started = WalkieTalkieManager.startTransmit(applicationContext)
+        WalkieGlobalState.isMicOn.value = started
+        WalkieGlobalState.lastStatusText.value = if (started) "내 MIC ON" else "송신 시작 실패"
         updateForegroundNotification()
     }
 
@@ -366,6 +511,33 @@ class WebSocketForegroundService : Service() {
         }
     }
 
+    private fun startForegroundWithMicType(notification: Notification) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            startForeground(
+                NOTIFICATION_ID,
+                notification,
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC or
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+            )
+        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            startForeground(
+                NOTIFICATION_ID,
+                notification,
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+            )
+        } else {
+            startForeground(NOTIFICATION_ID, notification)
+        }
+    }
+
+    private fun ensureForegroundForMic() {
+        try {
+            startForegroundWithMicType(createForegroundNotification())
+        } catch (e: Exception) {
+            Log.e("WS_SERVICE", "ensureForegroundForMic failed", e)
+        }
+    }
+
     private fun createForegroundNotification(): Notification {
         val isCallActive = WalkieGlobalState.isCallActive.value
         val callId = WalkieGlobalState.activeCallId.value
@@ -385,22 +557,15 @@ class WebSocketForegroundService : Service() {
         if (isCallActive && !callId.isNullOrBlank() && !isEmergency) {
             val peer = WalkieGlobalState.activePeerWorkerId.value ?: "상대"
             val micText = if (WalkieGlobalState.isMicOn.value) "MIC ON" else "MIC OFF"
+            val contentText = "상대: $peer / $micText"
+            val compactView = createWalkieCallCompactNotificationView(peer, micText)
 
             builder
                 .setContentTitle("기찬랜드 통화중")
-                .setContentText("상대: $peer / $micText")
-                .setStyle(NotificationCompat.BigTextStyle().bigText("상대: $peer / $micText"))
+                .setContentText(contentText)
                 .setCategory(NotificationCompat.CATEGORY_CALL)
-                .addAction(
-                    0,
-                    if (WalkieGlobalState.isMicOn.value) "MIC OFF" else "MIC ON",
-                    createServicePendingIntent(ACTION_TOGGLE_MIC, 3002)
-                )
-                .addAction(
-                    0,
-                    "통화 종료",
-                    createServicePendingIntent(ACTION_END_CALL, 3003)
-                )
+                .setCustomContentView(compactView)
+                .setStyle(NotificationCompat.DecoratedCustomViewStyle())
         } else {
             builder
                 .setContentTitle("기찬랜드 알림 연결 중")
@@ -409,6 +574,26 @@ class WebSocketForegroundService : Service() {
         }
 
         return builder.build()
+    }
+
+    private fun createWalkieCallCompactNotificationView(
+        peer: String,
+        micText: String
+    ): RemoteViews {
+        return RemoteViews(packageName, R.layout.notification_walkie_call_compact).apply {
+            setTextViewText(R.id.walkie_notification_title, "기찬랜드 통화중")
+            setTextViewText(R.id.walkie_notification_body, "상대: $peer / $micText")
+            setImageViewResource(R.id.walkie_notification_mic_button, R.drawable.ic_walkie_mic_24)
+            setImageViewResource(R.id.walkie_notification_end_button, R.drawable.ic_walkie_call_end_24)
+            setOnClickPendingIntent(
+                R.id.walkie_notification_mic_button,
+                createServicePendingIntent(ACTION_TOGGLE_MIC, 3002)
+            )
+            setOnClickPendingIntent(
+                R.id.walkie_notification_end_button,
+                createServicePendingIntent(ACTION_END_CALL, 3003)
+            )
+        }
     }
 
     private fun createServicePendingIntent(action: String, requestCode: Int): PendingIntent {

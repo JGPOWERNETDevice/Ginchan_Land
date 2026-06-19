@@ -1094,6 +1094,7 @@ fun WalkieTalkieScreen(
                     )
                 ) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
+
                         Text(
                             text = "MIC",
                             fontWeight = FontWeight.Bold

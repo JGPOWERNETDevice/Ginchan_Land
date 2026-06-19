@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="56dp"
+    android:orientation="horizontal"
+    android:gravity="center_vertical"
+    android:paddingStart="8dp"
+    android:paddingEnd="8dp">
+
+    <LinearLayout
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_weight="1"
+        android:orientation="vertical"
+        android:paddingEnd="8dp">
+
+        <TextView
+            android:id="@+id/walkie_notification_title"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:singleLine="true"
+            android:ellipsize="end"
+            android:text="기찬랜드 통화중"
+            android:textStyle="bold"
+            android:textSize="15sp"
+            android:textColor="#FF222222" />
+
+        <TextView
+            android:id="@+id/walkie_notification_body"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:singleLine="true"
+            android:ellipsize="end"
+            android:text="상대: - / MIC OFF"
+            android:textSize="13sp"
+            android:textColor="#FF444444" />
+    </LinearLayout>
+
+    <ImageView
+        android:id="@+id/walkie_notification_mic_button"
+        android:layout_width="38dp"
+        android:layout_height="38dp"
+        android:padding="8dp"
+        android:layout_marginEnd="8dp"
+        android:background="@drawable/bg_walkie_notification_button"
+        android:src="@drawable/ic_walkie_mic_24"
+        android:contentDescription="MIC ON/OFF" />
+
+    <ImageView
+        android:id="@+id/walkie_notification_end_button"
+        android:layout_width="38dp"
+        android:layout_height="38dp"
+        android:padding="8dp"
+        android:background="@drawable/bg_walkie_notification_end_button"
+        android:src="@drawable/ic_walkie_call_end_24"
+        android:contentDescription="통화 종료" />
+</LinearLayout>
