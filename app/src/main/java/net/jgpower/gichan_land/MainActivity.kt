@@ -155,6 +155,9 @@ class MainActivity : ComponentActivity() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             permissions += Manifest.permission.BLUETOOTH_SCAN
             permissions += Manifest.permission.BLUETOOTH_CONNECT
+            // Nearby Devices is normally enough on Android 12+, but several Samsung/Android builds
+            // return an empty BLE scan list unless Location permission is also granted.
+            permissions += Manifest.permission.ACCESS_FINE_LOCATION
         } else {
             permissions += Manifest.permission.ACCESS_FINE_LOCATION
         }

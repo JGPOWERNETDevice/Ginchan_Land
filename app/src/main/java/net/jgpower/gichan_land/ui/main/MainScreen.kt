@@ -54,6 +54,7 @@ fun MainScreen(
     onCreateEventClick: () -> Unit,
     onNoticeClick: () -> Unit,
     onWalkieTalkieClick: () -> Unit,
+    onWatchConnectClick: () -> Unit,
     onLogoutClick: () -> Unit,
     onExitAppClick: () -> Unit
 ) {
@@ -300,6 +301,15 @@ fun MainScreen(
             modifier = Modifier.fillMaxWidth()
         ) {
             Text("무전기")
+        }
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        Button(
+            onClick = onWatchConnectClick,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text("워치 연결")
         }
 
         Spacer(modifier = Modifier.height(12.dp))

@@ -57,6 +57,7 @@ import net.jgpower.gichan_land.ui.notice.NoticeScreen
 import net.jgpower.gichan_land.ui.signin.SignInScreen
 import net.jgpower.gichan_land.ui.walkietalkie.WalkieTalkieScreen
 import net.jgpower.gichan_land.ui.walkietalkie.WalkieIncomingCallPopupHost
+import net.jgpower.gichan_land.ui.watch.TWatchConnectScreen
 import kotlinx.coroutines.delay
 import net.jgpower.gichan_land.network.WalkieTalkieManager
 import net.jgpower.gichan_land.network.WalkieSignalingClient
@@ -69,6 +70,7 @@ object Routes {
     const val EVENT_CREATE = "event_create"
     const val NOTICE = "notice"
     const val WALKIE_TALKIE = "walkie_talkie"
+    const val T_WATCH = "t_watch"
 }
 
 @Composable
@@ -345,6 +347,9 @@ fun AppNavigation(
                 onWalkieTalkieClick = {
                     currentRoute.value = Routes.WALKIE_TALKIE
                 },
+                onWatchConnectClick = {
+                    currentRoute.value = Routes.T_WATCH
+                },
                 onLogoutClick = {
                     val workerId = loginWorkerId.value
 
@@ -465,6 +470,14 @@ fun AppNavigation(
         Routes.WALKIE_TALKIE -> {
             WalkieTalkieScreen(
                 workerId = loginWorkerId.value,
+                onBackClick = {
+                    currentRoute.value = Routes.MAIN
+                }
+            )
+        }
+
+        Routes.T_WATCH -> {
+            TWatchConnectScreen(
                 onBackClick = {
                     currentRoute.value = Routes.MAIN
                 }

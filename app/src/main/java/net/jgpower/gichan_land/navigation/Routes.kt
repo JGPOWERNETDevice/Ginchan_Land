@@ -7,4 +7,5 @@ object Routes {
     const val NOTICE = "notice"
 
     const val WALKIE_TALKIE = "walkie_talkie"
+    const val T_WATCH = "t_watch"
 }
