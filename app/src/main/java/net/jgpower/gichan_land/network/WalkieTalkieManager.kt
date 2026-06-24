@@ -112,6 +112,12 @@ object WalkieTalkieManager {
     ) {
         appContext = context.applicationContext
 
+        if (!ServerConfig.isWalkieNetworkAvailable(context)) {
+            Log.d(TAG, "start blocked. walkie internal Wi-Fi unavailable")
+            stop()
+            return
+        }
+
         currentWorkerId = workerId
         currentAreaGroup = areaGroup
         broadcastAddress = getBroadcastAddress(context)
@@ -254,6 +260,12 @@ object WalkieTalkieManager {
 
     @SuppressLint("MissingPermission")
     fun startTransmit(context: Context): Boolean {
+        if (!ServerConfig.isWalkieNetworkAvailable(context)) {
+            Log.d(TAG, "startTransmit blocked. walkie internal Wi-Fi unavailable")
+            stopTransmit()
+            return false
+        }
+
         val workerId = currentWorkerId
         val target = currentTarget
         val udpSocket = socket

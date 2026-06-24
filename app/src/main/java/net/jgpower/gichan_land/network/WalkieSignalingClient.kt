@@ -8,6 +8,7 @@ import okhttp3.Request
 import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
+import net.jgpower.gichan_land.util.ErrorMessageSanitizer
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.concurrent.TimeUnit
@@ -189,7 +190,7 @@ object WalkieSignalingClient {
                     isConnectedFlag = false
                     isConnectingFlag = false
                     post {
-                        notifyListeners { it.onError(t.message ?: "WebSocket error") }
+                        notifyListeners { it.onError(ErrorMessageSanitizer.stableSignalNetworkError()) }
                         notifyListeners { it.onDisconnected() }
                     }
                 }
@@ -563,7 +564,7 @@ object WalkieSignalingClient {
             }
         } catch (e: Exception) {
             Log.e(TAG, "handle message failed", e)
-            post { notifyListeners { it.onError(e.message ?: "message parse error") } }
+            post { notifyListeners { it.onError(ErrorMessageSanitizer.signalErrorMessage(e.message ?: "message parse error")) } }
         }
     }
 
