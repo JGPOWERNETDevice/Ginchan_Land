@@ -26,6 +26,7 @@ import net.jgpower.gichan_land.data.textalert.TextAlert
 import net.jgpower.gichan_land.data.textalert.TextAlertState
 import net.jgpower.gichan_land.network.ApiServiceManager
 import net.jgpower.gichan_land.repository.TextAlertRepository
+import net.jgpower.gichan_land.util.ErrorMessageSanitizer
 
 @Composable
 fun NoticeScreen(
@@ -58,7 +59,7 @@ fun NoticeScreen(
                 if (response.success) {
                     TextAlertState.setAlerts(response.data)
                 } else {
-                    errorMessage.value = response.message
+                    errorMessage.value = ErrorMessageSanitizer.genericNetworkError(response.message, "공지사항을 불러오지 못했습니다.")
                 }
             } catch (_: Exception) {
                 errorMessage.value = "공지사항을 불러오지 못했습니다."

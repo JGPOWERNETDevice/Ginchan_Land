@@ -25,6 +25,7 @@ import kotlinx.coroutines.launch
 import net.jgpower.gichan_land.data.datastore.PendingLogoutStore
 import net.jgpower.gichan_land.network.ApiServiceManager
 import net.jgpower.gichan_land.repository.AuthRepository
+import net.jgpower.gichan_land.util.ErrorMessageSanitizer
 
 @Composable
 fun SignInScreen(
@@ -159,7 +160,7 @@ fun SignInScreen(
                                         onLoginSuccess(body.worker.workerId)
                                     } else {
                                         errorMessage.value =
-                                            body?.message ?: "로그인에 실패했습니다."
+                                            ErrorMessageSanitizer.genericNetworkError(body?.message, "로그인에 실패했습니다.")
                                     }
                                 } else {
                                     errorMessage.value = when (response.code()) {

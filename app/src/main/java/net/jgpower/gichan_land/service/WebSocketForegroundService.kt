@@ -57,10 +57,7 @@ class WebSocketForegroundService : Service() {
 
                 if (!WalkieSignalingClient.isConnected() && !WalkieSignalingClient.isConnecting()) {
                     Log.d("WS_SERVICE", "walkie websocket reconnect by health check")
-                    WalkieSignalingClient.connect(
-                        serverBaseUrl = ServerConfig.getBaseHttpUrl(applicationContext),
-                        workerId = workerId
-                    )
+                    connectWalkieSignalingIfInternalNetwork(workerId)
                 } else {
                     WalkieSignalingClient.ping()
                 }
@@ -150,6 +147,35 @@ class WebSocketForegroundService : Service() {
         }
     }
 
+    private fun terminateLocalWalkieStateOnSignalLost(message: String = "무전기 연결이 끊어졌습니다. 재연결 중...") {
+        val pendingCallIds = WalkieGlobalState.pendingIncomingCalls.map { it.callId }
+
+        pendingCallIds.forEach { callId ->
+            AppNotificationManager.cancelWalkieIncomingCallNotification(applicationContext, callId)
+        }
+
+        try {
+            WalkieTalkieManager.stopTransmit()
+            WalkieTalkieManager.stop()
+        } catch (e: Exception) {
+            Log.e("WS_SERVICE", "walkie local cleanup failed", e)
+        }
+
+        WalkieGlobalState.isMicOn.value = false
+
+        if (WalkieGlobalState.isEmergencyBroadcastActive.value) {
+            WalkieGlobalState.endEmergencyBroadcast("무전기 연결 끊김")
+        }
+
+        if (WalkieGlobalState.activeCallId.value != null || WalkieGlobalState.pendingIncomingCalls.isNotEmpty()) {
+            WalkieGlobalState.clearCall(message)
+        } else {
+            WalkieGlobalState.lastStatusText.value = message
+        }
+
+        updateForegroundNotification()
+    }
+
     override fun onDestroy() {
         Log.d("WS_SERVICE", "onDestroy")
         mainHandler.removeCallbacks(walkiePingRunnable)
@@ -169,6 +195,24 @@ class WebSocketForegroundService : Service() {
     }
 
 
+
+    private fun connectWalkieSignalingIfInternalNetwork(workerId: String): Boolean {
+        val walkieBaseUrl = ServerConfig.getWalkieBaseHttpUrl(applicationContext)
+        if (walkieBaseUrl.isNullOrBlank()) {
+            Log.d("WS_SERVICE", "walkie network unavailable. block signaling connect")
+            terminateLocalWalkieStateOnSignalLost(ServerConfig.walkieNetworkErrorMessage())
+            WalkieSignalingClient.disconnect(sendDisconnect = false)
+            mainHandler.removeCallbacks(walkiePingRunnable)
+            return false
+        }
+
+        WalkieSignalingClient.connect(
+            serverBaseUrl = walkieBaseUrl,
+            workerId = workerId
+        )
+        return true
+    }
+
     private fun startWalkieSignaling(workerId: String) {
         walkieWorkerId = workerId
 
@@ -179,6 +223,7 @@ class WebSocketForegroundService : Service() {
                 }
 
                 override fun onDisconnected() {
+                    terminateLocalWalkieStateOnSignalLost()
                     scheduleWalkieReconnect(workerId)
                 }
 
@@ -338,15 +383,13 @@ class WebSocketForegroundService : Service() {
 
                 override fun onError(message: String) {
                     Log.d("WS_SERVICE", "walkie signaling error=$message")
+                    terminateLocalWalkieStateOnSignalLost("무전기 연결 오류. 재연결 중...")
                     scheduleWalkieReconnect(workerId)
                 }
             }
         )
 
-        WalkieSignalingClient.connect(
-            serverBaseUrl = ServerConfig.getBaseHttpUrl(applicationContext),
-            workerId = workerId
-        )
+        connectWalkieSignalingIfInternalNetwork(workerId)
 
         ensureWalkieReceiverReady(workerId)
 
@@ -361,16 +404,19 @@ class WebSocketForegroundService : Service() {
         mainHandler.postDelayed({
             if (!WalkieSignalingClient.isConnected() && !WalkieSignalingClient.isConnecting()) {
                 Log.d("WS_SERVICE", "walkie websocket reconnect scheduled")
-                WalkieSignalingClient.connect(
-                    serverBaseUrl = ServerConfig.getBaseHttpUrl(applicationContext),
-                    workerId = workerId
-                )
+                connectWalkieSignalingIfInternalNetwork(workerId)
             }
         }, 1500L)
     }
 
     private fun ensureWalkieReceiverReady(workerId: String, afterReady: (() -> Unit)? = null) {
         if (workerId.isBlank()) return
+
+        if (!ServerConfig.isWalkieNetworkAvailable(applicationContext)) {
+            terminateLocalWalkieStateOnSignalLost(ServerConfig.walkieNetworkErrorMessage())
+            afterReady?.let { callback -> mainHandler.post { callback.invoke() } }
+            return
+        }
 
         if (WalkieTalkieManager.isStarted()) {
             afterReady?.invoke()
@@ -383,7 +429,7 @@ class WebSocketForegroundService : Service() {
                 ApiServiceManager.init(applicationContext)
                 val workers = runBlocking { ApiServiceManager.apiService.getOnlineWorkers() }
                 val areaGroup = workers.firstOrNull { it.workerId?.trim() == workerId }
-                    ?.areaGroup
+                    ?.primaryGroupName()
                     ?.trim()
 
                 if (!areaGroup.isNullOrBlank()) {
@@ -435,6 +481,11 @@ class WebSocketForegroundService : Service() {
     }
 
     private fun toggleMicFromNotification() {
+        if (!ServerConfig.isWalkieNetworkAvailable(applicationContext)) {
+            terminateLocalWalkieStateOnSignalLost(ServerConfig.walkieNetworkErrorMessage())
+            return
+        }
+
         if (!WalkieGlobalState.isCallActive.value ||
             WalkieGlobalState.activeCallId.value.isNullOrBlank() ||
             WalkieGlobalState.isEmergencyBroadcastActive.value

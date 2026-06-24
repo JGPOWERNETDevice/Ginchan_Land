@@ -20,6 +20,7 @@ import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.launch
 import net.jgpower.gichan_land.network.ApiServiceManager
 import net.jgpower.gichan_land.repository.EmergencyRepository
+import net.jgpower.gichan_land.util.ErrorMessageSanitizer
 
 @Composable
 fun EmergencyCallSection(
@@ -48,7 +49,7 @@ fun EmergencyCallSection(
                     type = type
                 )
 
-                resultMessage = response.message
+                resultMessage = ErrorMessageSanitizer.genericNetworkError(response.message, "응급 호출 요청 결과를 확인할 수 없습니다.")
             } catch (e: Exception) {
                 resultMessage = "응급 호출 요청 중 오류가 발생했습니다."
             } finally {
