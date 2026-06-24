@@ -28,6 +28,21 @@ object ServerConfig {
         }
     }
 
+    // 무전기 음성 통신은 내부망 Wi-Fi에서만 허용합니다.
+    // LTE/5G 또는 Wi-Fi 미연결 상태에서는 공인 Node-RED 주소로 신호 서버가 연결되어도
+    // UDP 음성 통신이 정상 동작하지 않으므로 무전기 기능을 차단합니다.
+    fun isWalkieNetworkAvailable(context: Context): Boolean {
+        return isWifi(context)
+    }
+
+    fun getWalkieBaseHttpUrl(context: Context): String? {
+        return if (isWalkieNetworkAvailable(context)) LOCAL_HTTP_URL else null
+    }
+
+    fun walkieNetworkErrorMessage(): String {
+        return "무전기는 내부 Wi-Fi 연결 상태에서만 사용할 수 있습니다. 네트워크를 확인하세요."
+    }
+
     private fun isWifi(context: Context): Boolean {
         val connectivityManager =
             context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager

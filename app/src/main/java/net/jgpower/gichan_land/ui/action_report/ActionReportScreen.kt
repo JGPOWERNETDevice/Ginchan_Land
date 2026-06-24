@@ -33,6 +33,7 @@ import net.jgpower.gichan_land.data.alert.WorkerAlert
 import net.jgpower.gichan_land.network.ApiServiceManager
 import net.jgpower.gichan_land.repository.AlertRepository
 import net.jgpower.gichan_land.repository.EmergencyRepository
+import net.jgpower.gichan_land.util.ErrorMessageSanitizer
 @Composable
 fun ActionReportScreen(
     alertId: String,
@@ -182,9 +183,7 @@ fun ActionReportScreen(
                         else -> "응급 호출이 접수되었습니다."
                     }
                 } else {
-                    errorMessage.value = response.message.ifBlank {
-                        "응급 호출 실패"
-                    }
+                    errorMessage.value = ErrorMessageSanitizer.genericNetworkError(response.message, "응급 호출 실패")
                 }
             } catch (_: Exception) {
                 errorMessage.value = "서버에 연결할 수 없습니다."

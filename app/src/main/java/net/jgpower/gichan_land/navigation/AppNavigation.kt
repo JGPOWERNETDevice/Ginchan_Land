@@ -125,7 +125,7 @@ fun AppNavigation(
                 try {
                     val workers = ApiServiceManager.apiService.getOnlineWorkers()
                     val me = workers.firstOrNull { it.workerId?.trim() == workerId }
-                    val areaGroup = me?.areaGroup
+                    val areaGroup = me?.primaryGroupName()
 
                     if (!areaGroup.isNullOrBlank()) {
                         WalkieTalkieManager.start(

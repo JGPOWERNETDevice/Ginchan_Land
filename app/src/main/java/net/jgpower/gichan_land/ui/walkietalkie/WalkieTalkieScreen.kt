@@ -57,14 +57,17 @@ import java.util.Date
 import java.util.Locale
 import net.jgpower.gichan_land.data.walkie.IncomingWalkieCallState
 import net.jgpower.gichan_land.data.walkie.OnlineWorkerDto
+import net.jgpower.gichan_land.data.walkie.OnlineWorkerGroupDto
 import net.jgpower.gichan_land.data.walkie.WalkieGlobalState
 import net.jgpower.gichan_land.data.walkie.WalkieMissedCallState
 import net.jgpower.gichan_land.data.walkie.WalkieTarget
 import net.jgpower.gichan_land.data.walkie.WalkieTargetType
 import net.jgpower.gichan_land.network.ApiServiceManager
+import net.jgpower.gichan_land.network.ServerConfig
 import net.jgpower.gichan_land.network.WalkieSignalingClient
 import net.jgpower.gichan_land.network.WalkieTalkieManager
 import net.jgpower.gichan_land.service.WebSocketForegroundService
+import net.jgpower.gichan_land.util.ErrorMessageSanitizer
 
 private const val MONITOR_WORKER_ID = "monitor"
 private const val MONITOR_NAME = "중앙관제"
@@ -96,10 +99,14 @@ fun WalkieTalkieScreen(
     val selectedWorkerIds = remember { mutableStateMapOf<String, OnlineWorkerDto>() }
 
     var isLoading by remember { mutableStateOf(false) }
+    var isWalkieNetworkAvailable by remember { mutableStateOf(ServerConfig.isWalkieNetworkAvailable(context)) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
+    var lastErrorMessageAt by remember { mutableStateOf(0L) }
 
     var myAreaGroup by remember { mutableStateOf<String?>(null) }
-    var isGroupSelected by remember { mutableStateOf(true) }
+    var myGroups by remember { mutableStateOf<List<OnlineWorkerGroupDto>>(emptyList()) }
+    var selectedGroupCode by remember { mutableStateOf<String?>(null) }
+    var isGroupSelected by remember { mutableStateOf(false) }
     var selectedTarget by remember { mutableStateOf<WalkieTarget?>(null) }
 
     var isMicOn by WalkieGlobalState.isMicOn
@@ -128,6 +135,18 @@ fun WalkieTalkieScreen(
 
     fun workerDisplayId(worker: OnlineWorkerDto): String {
         return worker.workerId?.trim()?.takeIf { it.isNotBlank() } ?: "-"
+    }
+
+    fun groupDisplayName(group: OnlineWorkerGroupDto): String {
+        return group.groupName?.trim()?.takeIf { it.isNotBlank() }
+            ?: group.groupCode?.trim()?.takeIf { it.isNotBlank() }
+            ?: "-"
+    }
+
+    fun groupKey(group: OnlineWorkerGroupDto): String {
+        return group.groupCode?.trim()?.takeIf { it.isNotBlank() }
+            ?: group.groupName?.trim()?.takeIf { it.isNotBlank() }
+            ?: ""
     }
 
 
@@ -159,6 +178,52 @@ fun WalkieTalkieScreen(
             "emergency" -> "긴급 전파 수신으로 통화 종료"
             else -> "통화 종료됨"
         }
+    }
+
+    fun requestFailedReasonText(reason: String?): String {
+        return when (reason) {
+            "caller_busy" -> "이미 통화 중입니다."
+            "callee_busy" -> "상대방이 통화 중입니다."
+            "caller_waiting" -> "이미 연결 요청 중입니다."
+            "caller_offline" -> "신호 연결을 확인하는 중입니다. 잠시 후 다시 시도하세요."
+            "callee_offline" -> "상대방이 현재 연결되어 있지 않습니다."
+            "missing_worker_id" -> "연결 대상 정보가 올바르지 않습니다."
+            "same_worker" -> "자기 자신에게는 연결할 수 없습니다."
+            "emergency_active" -> "긴급 전파 중에는 연결할 수 없습니다."
+            else -> ErrorMessageSanitizer.signalErrorMessage(reason)
+        }
+    }
+
+    fun showUserError(message: String, force: Boolean = false) {
+        val text = message.trim()
+        if (text.isBlank()) return
+
+        val nowMs = System.currentTimeMillis()
+        if (force || errorMessage != text || nowMs - lastErrorMessageAt > 2500L) {
+            errorMessage = text
+            lastErrorMessageAt = nowMs
+        }
+    }
+
+    fun isPersistentErrorText(text: String?): Boolean {
+        val value = text ?: return false
+        return value.contains("신호 서버") ||
+                value.contains("신호 연결") ||
+                value.contains("네트워크") ||
+                value.contains("내부 Wi-Fi")
+    }
+
+    fun showStableSignalError() {
+        showUserError(ErrorMessageSanitizer.stableSignalNetworkError())
+    }
+
+    fun showTransientUserError(message: String) {
+        showUserError(message, force = true)
+    }
+
+    fun showWalkieNetworkBlocked() {
+        showUserError(ServerConfig.walkieNetworkErrorMessage())
+        callStatusText = ServerConfig.walkieNetworkErrorMessage()
     }
 
     fun formatMissedTime(epochMillis: Long): String {
@@ -280,12 +345,8 @@ fun WalkieTalkieScreen(
     fun selectedTargetText(): String {
         if (isMonitorSelected()) return "현재 선택 대상: $MONITOR_NAME"
 
-        return if (isGroupSelected) {
-            "현재 선택 대상: 그룹 전체"
-        } else {
-            val names = selectedWorkerIds.values.joinToString(", ") { workerDisplayName(it) }
-            "현재 선택 대상: ${names.ifBlank { "선택 없음" }}"
-        }
+        val names = selectedWorkerIds.values.joinToString(", ") { workerDisplayName(it) }
+        return "현재 선택 대상: ${names.ifBlank { "선택 없음" }}"
     }
 
     fun clearCallState(message: String = "대기 중") {
@@ -325,6 +386,14 @@ fun WalkieTalkieScreen(
     }
 
     fun startMicNow() {
+        isWalkieNetworkAvailable = ServerConfig.isWalkieNetworkAvailable(context)
+        if (!isWalkieNetworkAvailable) {
+            showWalkieNetworkBlocked()
+            WalkieTalkieManager.stopTransmit()
+            isMicOn = false
+            return
+        }
+
         val callId = activeCallId
 
         if (isEmergencyBroadcastActive) {
@@ -371,22 +440,47 @@ fun WalkieTalkieScreen(
     suspend fun loadOnlineWorkers() {
         try {
             isLoading = true
-            errorMessage = null
+            isWalkieNetworkAvailable = ServerConfig.isWalkieNetworkAvailable(context)
+
+            if (!isWalkieNetworkAvailable) {
+                // 내부 Wi-Fi가 끊긴 상태에서는 무전기 기능만 차단합니다.
+                // 단, 직전에 받아둔 그룹/중앙관제/직원 목록까지 지우면
+                // 사용자에게 "배정된 그룹 없음", "중앙관제 미연결"처럼 잘못 보일 수 있으므로 캐시는 유지합니다.
+                selectedWorkerIds.clear()
+                selectedTarget = null
+                WalkieTalkieManager.stopTransmit()
+                WalkieTalkieManager.stop()
+                WalkieSignalingClient.disconnect(sendDisconnect = false)
+                if (activeCallId != null || isCallActive || pendingIncomingCalls.isNotEmpty()) {
+                    clearCallState(ServerConfig.walkieNetworkErrorMessage())
+                } else {
+                    callStatusText = ServerConfig.walkieNetworkErrorMessage()
+                }
+                showUserError(ServerConfig.walkieNetworkErrorMessage())
+                return
+            }
 
             val list = ApiServiceManager.apiService.getOnlineWorkers()
 
             onlineWorkers.clear()
             onlineWorkers.addAll(list)
+            if (isWalkieNetworkAvailable && (errorMessage?.contains("네트워크") == true || errorMessage?.contains("신호 서버") == true || errorMessage?.contains("온라인 직원") == true || errorMessage?.contains("내부 Wi-Fi") == true)) {
+                errorMessage = null
+            }
 
             val me = list.firstOrNull { it.workerId?.trim() == currentWorkerId }
-            myAreaGroup = me?.areaGroup?.trim()
-            WalkieSignalingClient.updateWorkerInfo(myAreaGroup)
+            val groups = me?.groupItems().orEmpty()
+            myGroups = groups
+            myAreaGroup = me?.primaryGroupName()
+            val myGroupText = me?.groupNamesText()?.takeIf { it.isNotBlank() } ?: myAreaGroup
+            WalkieSignalingClient.updateWorkerInfo(myGroupText)
 
-            if (selectedTarget == null && !myAreaGroup.isNullOrBlank()) {
-                selectGroupAll()
+            val selectedStillExists = groups.any { groupKey(it) == selectedGroupCode }
+            if (!selectedStillExists) {
+                selectedGroupCode = groups.firstOrNull()?.let { groupKey(it) }
             }
         } catch (e: Exception) {
-            errorMessage = "온라인 직원 목록 조회 실패: ${e.message}"
+            showStableSignalError()
         } finally {
             isLoading = false
         }
@@ -399,8 +493,29 @@ fun WalkieTalkieScreen(
         }
     }
 
+    LaunchedEffect(errorMessage, lastErrorMessageAt) {
+        val shownMessage = errorMessage
+        val shownAt = lastErrorMessageAt
+
+        if (!shownMessage.isNullOrBlank() && !isPersistentErrorText(shownMessage)) {
+            delay(3000L)
+
+            if (errorMessage == shownMessage && lastErrorMessageAt == shownAt) {
+                errorMessage = null
+            }
+        }
+    }
+
     LaunchedEffect(currentWorkerId, myAreaGroup) {
         val group = myAreaGroup
+
+        isWalkieNetworkAvailable = ServerConfig.isWalkieNetworkAvailable(context)
+        if (!isWalkieNetworkAvailable) {
+            WalkieTalkieManager.stopTransmit()
+            WalkieTalkieManager.stop()
+            callStatusText = ServerConfig.walkieNetworkErrorMessage()
+            return@LaunchedEffect
+        }
 
         if (!group.isNullOrBlank()) {
             WalkieTalkieManager.start(
@@ -414,15 +529,25 @@ fun WalkieTalkieScreen(
     LaunchedEffect(currentWorkerId) {
         WalkieSignalingClient.listener = object : WalkieSignalingClient.Listener {
             override fun onConnected() {
+                isWalkieNetworkAvailable = ServerConfig.isWalkieNetworkAvailable(context)
+                if (!isWalkieNetworkAvailable) {
+                    WalkieSignalingClient.disconnect(sendDisconnect = false)
+                    WalkieTalkieManager.stopTransmit()
+                    WalkieTalkieManager.stop()
+                    callStatusText = ServerConfig.walkieNetworkErrorMessage()
+                    showUserError(ServerConfig.walkieNetworkErrorMessage())
+                    return
+                }
+
                 callStatusText = "신호 서버 연결됨"
                 WalkieSignalingClient.missedCallsGet(currentWorkerId)
             }
 
             override fun onDisconnected() {
                 if (activeCallId != null) {
-                    clearCallState("신호 서버 연결 끊김")
+                    clearCallState("신호 연결이 끊겼습니다. 다시 연결 중입니다.")
                 } else {
-                    callStatusText = "신호 서버 연결 끊김"
+                    callStatusText = "신호 연결 재시도 중"
                 }
             }
 
@@ -568,8 +693,17 @@ fun WalkieTalkieScreen(
             }
 
             override fun onError(message: String) {
-                errorMessage = "신호 오류: $message"
-                callStatusText = "신호 오류"
+                val requestMessage = requestFailedReasonText(message)
+                val isNetworkSignalError = requestMessage.contains("신호 서버") ||
+                    requestMessage.contains("신호 연결") ||
+                    requestMessage.contains("네트워크")
+
+                if (isNetworkSignalError) {
+                    showStableSignalError()
+                    callStatusText = "신호 연결 재시도 중"
+                } else {
+                    showTransientUserError(requestMessage)
+                }
             }
         }
 
@@ -592,19 +726,20 @@ fun WalkieTalkieScreen(
     }
 
     val missedCalls = missedCallItems.map { toMissedUiState(it) }
+    val missedCallListScrollState = rememberScrollState()
 
+    val selectedGroup = myGroups.firstOrNull { groupKey(it) == selectedGroupCode }
     val groupWorkers = onlineWorkers.filter { worker ->
         val otherWorkerId = worker.workerId?.trim()
-        val otherAreaGroup = worker.areaGroup?.trim()
-        val myGroup = myAreaGroup?.trim()
 
-        !otherWorkerId.isNullOrBlank() &&
+        selectedGroup != null &&
+                !otherWorkerId.isNullOrBlank() &&
                 otherWorkerId != currentWorkerId &&
                 otherWorkerId != MONITOR_WORKER_ID &&
-                (
-                        myGroup.isNullOrBlank() ||
-                                otherAreaGroup == myGroup
-                        )
+                worker.belongsToGroup(
+                    groupCode = selectedGroup.groupCode,
+                    groupName = selectedGroup.groupName
+                )
     }
 
     val hasMonitorInOnlineWorkers = onlineWorkers.any {
@@ -647,12 +782,6 @@ fun WalkieTalkieScreen(
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            Text(
-                text = "내 그룹: ${myAreaGroup ?: "-"}",
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold
-            )
-
             Text(
                 text = "통화 상태: $callStatusText",
                 style = MaterialTheme.typography.bodyMedium,
@@ -817,76 +946,96 @@ fun WalkieTalkieScreen(
 
                             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                                 OutlinedButton(
-                                    onClick = { WalkieSignalingClient.missedCallsGet(currentWorkerId) }
+                                    onClick = {
+                                        WalkieMissedCallState.replaceAll(emptyList())
+                                        WalkieSignalingClient.missedCallsClear(currentWorkerId)
+                                    }
                                 ) {
-                                    Text("새로고침")
+                                    Text("모두 닫기")
                                 }
                             }
                         }
 
-                        missedCalls.take(5).forEach { missed ->
-                            Card(
-                                modifier = Modifier.fillMaxWidth(),
-                                shape = RoundedCornerShape(12.dp),
-                                colors = CardDefaults.cardColors(
-                                    containerColor = MaterialTheme.colorScheme.surfaceVariant
-                                )
-                            ) {
-                                Column(
-                                    modifier = Modifier.padding(12.dp),
-                                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(260.dp)
+                                .verticalScroll(missedCallListScrollState),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            missedCalls.forEach { missed ->
+                                Card(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    shape = RoundedCornerShape(12.dp),
+                                    colors = CardDefaults.cardColors(
+                                        containerColor = MaterialTheme.colorScheme.surfaceVariant
+                                    )
                                 ) {
-                                    Text(
-                                        text = "${missed.fromName ?: missed.fromWorkerId} 부재중 요청",
-                                        fontWeight = if (missed.read) FontWeight.Normal else FontWeight.Bold
-                                    )
-
-                                    Text(
-                                        text = "사유: ${missedReasonText(missed.reason)} / 시간: ${formatMissedTime(missed.endedAt)}",
-                                        style = MaterialTheme.typography.bodySmall
-                                    )
-
-                                    missed.fromAreaGroup?.takeIf { it.isNotBlank() }?.let { group ->
+                                    Column(
+                                        modifier = Modifier.padding(12.dp),
+                                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                                    ) {
                                         Text(
-                                            text = "그룹: $group",
+                                            text = "${missed.fromName ?: missed.fromWorkerId} 부재중 요청",
+                                            fontWeight = if (missed.read) FontWeight.Normal else FontWeight.Bold
+                                        )
+
+                                        Text(
+                                            text = "사유: ${missedReasonText(missed.reason)} / 시간: ${formatMissedTime(missed.endedAt)}",
                                             style = MaterialTheme.typography.bodySmall
                                         )
-                                    }
 
-                                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                        Button(
-                                            onClick = {
-                                                WalkieSignalingClient.requestCall(
-                                                    fromWorkerId = currentWorkerId,
-                                                    fromName = currentWorkerId,
-                                                    fromAreaGroup = myAreaGroup,
-                                                    toWorkerId = missed.fromWorkerId
-                                                )
-                                                WalkieSignalingClient.missedCallsMarkRead(
-                                                    workerId = currentWorkerId,
-                                                    missedId = missed.missedId
-                                                )
-                                                callStatusText = "${missed.fromWorkerId} 수신 요청 중..."
-                                            },
-                                            enabled = !isEmergencyBroadcastActive && activeCallId == null && pendingIncomingCalls.isEmpty()
-                                        ) {
-                                            Text("다시 연결")
+                                        missed.fromAreaGroup?.takeIf { it.isNotBlank() }?.let { group ->
+                                            Text(
+                                                text = "그룹: $group",
+                                                style = MaterialTheme.typography.bodySmall
+                                            )
                                         }
 
-                                        OutlinedButton(
-                                            onClick = {
-                                                WalkieMissedCallState.remove(
-                                                    missedId = missed.missedId,
-                                                    callId = missed.callId
-                                                )
-                                                WalkieSignalingClient.missedCallsRemove(
-                                                    workerId = currentWorkerId,
-                                                    missedId = missed.missedId,
-                                                    callId = missed.callId
-                                                )
+                                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                            Button(
+                                                onClick = {
+                                                    isWalkieNetworkAvailable = ServerConfig.isWalkieNetworkAvailable(context)
+                                                    if (!isWalkieNetworkAvailable || !WalkieSignalingClient.isConnected()) {
+                                                        showWalkieNetworkBlocked()
+                                                        WalkieSignalingClient.disconnect(sendDisconnect = false)
+                                                        WalkieTalkieManager.stopTransmit()
+                                                        WalkieTalkieManager.stop()
+                                                        return@Button
+                                                    }
+
+                                                    WalkieSignalingClient.requestCall(
+                                                        fromWorkerId = currentWorkerId,
+                                                        fromName = currentWorkerId,
+                                                        fromAreaGroup = myAreaGroup,
+                                                        toWorkerId = missed.fromWorkerId
+                                                    )
+                                                    WalkieSignalingClient.missedCallsMarkRead(
+                                                        workerId = currentWorkerId,
+                                                        missedId = missed.missedId
+                                                    )
+                                                    callStatusText = "${missed.fromWorkerId} 수신 요청 중..."
+                                                },
+                                                enabled = isWalkieNetworkAvailable && WalkieSignalingClient.isConnected() && !isEmergencyBroadcastActive && activeCallId == null && pendingIncomingCalls.isEmpty()
+                                            ) {
+                                                Text("다시 연결")
                                             }
-                                        ) {
-                                            Text("닫기")
+
+                                            OutlinedButton(
+                                                onClick = {
+                                                    WalkieMissedCallState.remove(
+                                                        missedId = missed.missedId,
+                                                        callId = missed.callId
+                                                    )
+                                                    WalkieSignalingClient.missedCallsRemove(
+                                                        workerId = currentWorkerId,
+                                                        missedId = missed.missedId,
+                                                        callId = missed.callId
+                                                    )
+                                                }
+                                            ) {
+                                                Text("닫기")
+                                            }
                                         }
                                     }
                                 }
@@ -906,17 +1055,46 @@ fun WalkieTalkieScreen(
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
                     Text(
-                        text = "송신 대상 선택",
+                        text = "그룹 선택",
                         fontWeight = FontWeight.Bold
                     )
 
-                    FilterChip(
-                        selected = isGroupSelected,
-                        onClick = {
-                            if (activeCallId == null) selectGroupAll()
-                        },
-                        label = { Text("그룹 전체") },
-                        enabled = !myAreaGroup.isNullOrBlank() && activeCallId == null && pendingIncomingCalls.isEmpty()
+                    if (myGroups.isEmpty()) {
+                        Text(
+                            text = if (isWalkieNetworkAvailable) {
+                                "배정된 그룹이 없습니다."
+                            } else {
+                                "내부 Wi-Fi 연결 후 그룹 정보를 확인할 수 있습니다."
+                            },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (isWalkieNetworkAvailable) {
+                                MaterialTheme.colorScheme.error
+                            } else {
+                                MaterialTheme.colorScheme.onSurfaceVariant
+                            }
+                        )
+                    } else {
+                        myGroups.forEach { group ->
+                            val key = groupKey(group)
+                            FilterChip(
+                                selected = selectedGroupCode == key,
+                                onClick = {
+                                    if (activeCallId == null && pendingIncomingCalls.isEmpty()) {
+                                        selectedGroupCode = key
+                                        selectedWorkerIds.clear()
+                                        selectedTarget = null
+                                        WalkieTalkieManager.setTarget(null)
+                                    }
+                                },
+                                label = { Text(groupDisplayName(group)) },
+                                enabled = isWalkieNetworkAvailable && activeCallId == null && pendingIncomingCalls.isEmpty()
+                            )
+                        }
+                    }
+
+                    Text(
+                        text = "송신 대상 선택",
+                        fontWeight = FontWeight.Bold
                     )
 
                     FilterChip(
@@ -925,10 +1103,16 @@ fun WalkieTalkieScreen(
                             if (activeCallId == null) selectMonitor()
                         },
                         label = { Text(MONITOR_NAME) },
-                        enabled = hasMonitorInOnlineWorkers && activeCallId == null && pendingIncomingCalls.isEmpty()
+                        enabled = isWalkieNetworkAvailable && hasMonitorInOnlineWorkers && activeCallId == null && pendingIncomingCalls.isEmpty()
                     )
 
-                    if (!hasMonitorInOnlineWorkers) {
+                    if (!isWalkieNetworkAvailable) {
+                        Text(
+                            text = "내부 Wi-Fi 연결 후 중앙관제 연결 상태를 확인할 수 있습니다.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    } else if (!hasMonitorInOnlineWorkers) {
                         Text(
                             text = "중앙관제가 현재 연결되어 있지 않습니다.",
                             style = MaterialTheme.typography.bodySmall,
@@ -937,14 +1121,23 @@ fun WalkieTalkieScreen(
                     }
 
                     Text(
-                        text = "1:1 연결할 직원 선택",
+                        text = "선택 그룹 직원",
                         fontWeight = FontWeight.Bold
                     )
 
                     if (groupWorkers.isEmpty()) {
                         Text(
-                            text = "현재 선택 가능한 직원이 없습니다.",
-                            style = MaterialTheme.typography.bodySmall
+                            text = if (isWalkieNetworkAvailable) {
+                                "선택한 그룹에 현재 접속 중인 직원이 없습니다."
+                            } else {
+                                "내부 Wi-Fi 연결 후 선택 그룹 직원 목록을 확인할 수 있습니다."
+                            },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (isWalkieNetworkAvailable) {
+                                MaterialTheme.colorScheme.onSurfaceVariant
+                            } else {
+                                MaterialTheme.colorScheme.onSurfaceVariant
+                            }
                         )
                     } else {
                         groupWorkers.forEach { worker ->
@@ -954,7 +1147,7 @@ fun WalkieTalkieScreen(
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .clickable(enabled = activeCallId == null && pendingIncomingCalls.isEmpty()) {
+                                    .clickable(enabled = isWalkieNetworkAvailable && activeCallId == null && pendingIncomingCalls.isEmpty()) {
                                         toggleWorker(worker)
                                     },
                                 verticalAlignment = Alignment.CenterVertically,
@@ -963,9 +1156,9 @@ fun WalkieTalkieScreen(
                                 Checkbox(
                                     checked = checked,
                                     onCheckedChange = {
-                                        if (activeCallId == null && pendingIncomingCalls.isEmpty()) toggleWorker(worker)
+                                        if (isWalkieNetworkAvailable && activeCallId == null && pendingIncomingCalls.isEmpty()) toggleWorker(worker)
                                     },
-                                    enabled = !isEmergencyBroadcastActive && activeCallId == null && pendingIncomingCalls.isEmpty()
+                                    enabled = isWalkieNetworkAvailable && !isEmergencyBroadcastActive && activeCallId == null && pendingIncomingCalls.isEmpty()
                                 )
 
                                 Text(text = "${workerDisplayName(worker)} (${workerDisplayId(worker)})")
@@ -985,6 +1178,15 @@ fun WalkieTalkieScreen(
 
                                 if (isEmergencyBroadcastActive) {
                                     errorMessage = "긴급 전파 수신 중에는 연결 요청을 보낼 수 없습니다."
+                                    return@Button
+                                }
+
+                                isWalkieNetworkAvailable = ServerConfig.isWalkieNetworkAvailable(context)
+                                if (!isWalkieNetworkAvailable || !WalkieSignalingClient.isConnected()) {
+                                    showWalkieNetworkBlocked()
+                                    WalkieSignalingClient.disconnect(sendDisconnect = false)
+                                    WalkieTalkieManager.stopTransmit()
+                                    WalkieTalkieManager.stop()
                                     return@Button
                                 }
 
@@ -1021,7 +1223,7 @@ fun WalkieTalkieScreen(
                                     "$targetWorkerId 수신 요청 중..."
                                 }
                             },
-                            enabled = !isEmergencyBroadcastActive && activeCallId == null && pendingIncomingCalls.isEmpty()
+                            enabled = isWalkieNetworkAvailable && WalkieSignalingClient.isConnected() && !isEmergencyBroadcastActive && activeCallId == null && pendingIncomingCalls.isEmpty()
                         ) {
                             Text("연결 요청")
                         }
@@ -1071,7 +1273,7 @@ fun WalkieTalkieScreen(
                             }
                         }
                     },
-                    enabled = isCallActive && !isEmergencyBroadcastActive,
+                    enabled = isWalkieNetworkAvailable && isCallActive && !isEmergencyBroadcastActive,
                     modifier = Modifier
                         .size(140.dp)
                         .clip(CircleShape)

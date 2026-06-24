@@ -65,6 +65,7 @@ fun MainScreen(
     val alerts = remember { mutableStateListOf<WorkerAlert>() }
     val errorMessage = remember { mutableStateOf<String?>(null) }
     val isLoading = remember { mutableStateOf(false) }
+    val myGroupNames = remember { mutableStateOf("") }
 
     val statusOptions = listOf("조치 전", "조치 중", "중앙 확인 중", "조치 완료")
 
@@ -184,6 +185,16 @@ fun MainScreen(
     LaunchedEffect(workerId) {
         loadAlerts()
         loadPresenceStatus()
+
+        try {
+            val workers = ApiServiceManager.apiService.getOnlineWorkers()
+            myGroupNames.value = workers
+                .firstOrNull { it.workerId?.trim() == workerId.trim() }
+                ?.groupNamesText()
+                .orEmpty()
+        } catch (_: Exception) {
+            myGroupNames.value = ""
+        }
     }
 
     DisposableEffect(workerId) {
@@ -238,6 +249,13 @@ fun MainScreen(
                     text = "직원 ID: $workerId",
                     style = MaterialTheme.typography.bodyMedium
                 )
+
+                if (myGroupNames.value.isNotBlank()) {
+                    Text(
+                        text = "소속 그룹: ${myGroupNames.value}",
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                }
             }
 
             Row(

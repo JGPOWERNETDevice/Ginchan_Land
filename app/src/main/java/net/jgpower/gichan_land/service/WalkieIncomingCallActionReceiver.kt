@@ -6,6 +6,7 @@ import android.content.Intent
 import android.util.Log
 import net.jgpower.gichan_land.MainActivity
 import net.jgpower.gichan_land.data.walkie.WalkieGlobalState
+import net.jgpower.gichan_land.network.ServerConfig
 import net.jgpower.gichan_land.network.WalkieSignalingClient
 
 class WalkieIncomingCallActionReceiver : BroadcastReceiver() {
@@ -22,6 +23,13 @@ class WalkieIncomingCallActionReceiver : BroadcastReceiver() {
 
         when (action) {
             ACTION_ACCEPT -> {
+                if (!ServerConfig.isWalkieNetworkAvailable(context) || !WalkieSignalingClient.isConnected()) {
+                    Log.d(TAG, "accept blocked. walkie network unavailable callId=$callId workerId=$workerId")
+                    WalkieGlobalState.removeIncomingCall(callId)
+                    AppNotificationManager.cancelWalkieIncomingCallNotification(context, callId)
+                    return
+                }
+
                 Log.d(TAG, "accept callId=$callId workerId=$workerId")
                 WalkieSignalingClient.acceptCall(callId = callId, workerId = workerId)
                 WalkieGlobalState.removeIncomingCall(callId)
