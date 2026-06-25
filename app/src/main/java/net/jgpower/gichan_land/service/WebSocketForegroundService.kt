@@ -100,6 +100,8 @@ class WebSocketForegroundService : Service() {
             return START_NOT_STICKY
         }
 
+        TWatchBleNotifier.start(applicationContext)
+
         try {
             startForegroundWithMicType(createForegroundNotification())
 
@@ -109,8 +111,6 @@ class WebSocketForegroundService : Service() {
             stopSelf()
             return START_NOT_STICKY
         }
-
-        TWatchBleNotifier.start(applicationContext)
 
         try {
             AppWebSocketManager.connect(
@@ -596,6 +596,8 @@ class WebSocketForegroundService : Service() {
     }
 
     private fun ensureForegroundForMic() {
+        TWatchBleNotifier.start(applicationContext)
+
         try {
             startForegroundWithMicType(createForegroundNotification())
         } catch (e: Exception) {
