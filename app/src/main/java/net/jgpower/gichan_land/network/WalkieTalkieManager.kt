@@ -10,6 +10,7 @@ import android.media.AudioManager
 import android.media.AudioRecord
 import android.media.AudioTrack
 import android.media.MediaRecorder
+import android.media.audiofx.AcousticEchoCanceler
 import android.net.wifi.WifiManager
 import android.util.Log
 import androidx.core.content.ContextCompat
@@ -28,6 +29,8 @@ import android.media.AudioDeviceInfo
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.os.Process
+import android.os.SystemClock
 object WalkieTalkieManager {
 
     private const val TAG = "WALKIE"
@@ -46,21 +49,27 @@ object WalkieTalkieManager {
     private const val TARGET_GROUP = 2
     private const val TARGET_ALL = 3
 
-    private const val SAMPLE_RATE = 8000
+    private const val SAMPLE_RATE = 16000
     private const val FRAME_DURATION_MS = 20
     private const val FRAME_SAMPLES = SAMPLE_RATE * FRAME_DURATION_MS / 1000
     private const val FRAME_BYTES = FRAME_SAMPLES * 2
-    private const val OPUS_BITRATE = 16000
+    private const val OPUS_BITRATE = 24000
 
     private const val MAX_PAYLOAD_BYTES = 1024
 
-    private const val JITTER_BUFFER_START_FRAMES = 4
-    private const val JITTER_BUFFER_MAX_FRAMES = 16
-    private const val PLAYBACK_IDLE_SLEEP_MS = 5L
+    private const val JITTER_BUFFER_START_FRAMES = 6
+    private const val JITTER_BUFFER_TARGET_FRAMES = 7
+    private const val JITTER_BUFFER_MAX_FRAMES = 20
+    private const val PLAYBACK_IDLE_SLEEP_MS = 1L
+    private const val PLAYBACK_MAX_PLC_FRAMES = 1
 
-    private const val AUDIO_BUFFER_MULTIPLIER = 4
-    private const val RECORD_BUFFER_MIN_FRAMES = 8
-    private const val PLAYBACK_BUFFER_MIN_FRAMES = 12
+    // App-level redundancy. Each UDP packet carries the current Opus frame plus
+    // the last 2 frames. This recovers short UDP broadcast losses without
+    // increasing packet count or relying on long PLC.
+    private const val REDUNDANT_PAYLOAD_MAGIC = 0x52 // 'R'
+    private const val REDUNDANT_HISTORY_FRAMES = 5
+    private const val REDUNDANT_MAX_FRAMES_PER_PACKET = REDUNDANT_HISTORY_FRAMES + 1
+
     private const val USE_WEBRTC_APM = true
 
     @Volatile
@@ -97,18 +106,30 @@ object WalkieTalkieManager {
     private var audioDeviceCallback: AudioDeviceCallback? = null
 
     @Volatile
-    private var legacyScoStartRequested = false
-
-    @Volatile
     private var playbackTrack: AudioTrack? = null
 
     @Volatile
     private var audioProcessor: WebRtcAudioProcessor? = null
 
+    @Volatile
+    private var multicastLock: WifiManager.MulticastLock? = null
+
+    @Volatile
+    private var wifiLock: WifiManager.WifiLock? = null
+
     private val playbackLock = Object()
     private val playbackQueue = ArrayDeque<ByteArray>()
 
     private var sequence = 0
+
+    private data class EncodedAudioFrame(
+        val seq: Int,
+        val opusBytes: ByteArray
+    )
+
+    private val transmitHistory = ArrayDeque<EncodedAudioFrame>()
+
+    private val lastSeqBySender = mutableMapOf<String, Int>()
 
     fun start(
         context: Context,
@@ -146,6 +167,7 @@ object WalkieTalkieManager {
             }
 
         enterCommunicationMode(context)
+        acquireWifiPacketLocks(context)
         registerAudioDeviceCallback(context)
         routeCommunicationAudioDevice(context)
         initPlaybackTrack()
@@ -159,6 +181,8 @@ object WalkieTalkieManager {
         val newSocket = DatagramSocket(null).apply {
             reuseAddress = true
             broadcast = true
+            receiveBufferSize = 256 * 1024
+            sendBufferSize = 256 * 1024
             bind(InetSocketAddress(UDP_PORT))
         }
 
@@ -181,6 +205,14 @@ object WalkieTalkieManager {
         synchronized(playbackLock) {
             playbackQueue.clear()
             playbackLock.notifyAll()
+        }
+
+        synchronized(lastSeqBySender) {
+            lastSeqBySender.clear()
+        }
+
+        synchronized(transmitHistory) {
+            transmitHistory.clear()
         }
 
         try {
@@ -211,6 +243,8 @@ object WalkieTalkieManager {
             playbackTrack = null
         }
 
+        releaseWifiPacketLocks()
+
         appContext?.let {
             unregisterAudioDeviceCallback(it)
             exitCommunicationMode(it)
@@ -233,6 +267,60 @@ object WalkieTalkieManager {
         return isReceiverRunning && socket != null
     }
 
+
+    @Suppress("DEPRECATION")
+    private fun acquireWifiPacketLocks(context: Context) {
+        try {
+            val wifiManager =
+                context.applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
+
+            if (multicastLock == null) {
+                multicastLock = wifiManager.createMulticastLock("walkie-udp-multicast-lock").apply {
+                    setReferenceCounted(false)
+                    acquire()
+                }
+                Log.d(TAG, "Wi-Fi multicast lock acquired")
+            }
+
+            if (wifiLock == null) {
+                wifiLock = wifiManager.createWifiLock(
+                    WifiManager.WIFI_MODE_FULL_HIGH_PERF,
+                    "walkie-udp-high-perf-lock"
+                ).apply {
+                    setReferenceCounted(false)
+                    acquire()
+                }
+                Log.d(TAG, "Wi-Fi high perf lock acquired")
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "acquire Wi-Fi packet locks failed", e)
+        }
+    }
+
+    private fun releaseWifiPacketLocks() {
+        try {
+            multicastLock?.let { lock ->
+                if (lock.isHeld) lock.release()
+            }
+            Log.d(TAG, "Wi-Fi multicast lock released")
+        } catch (e: Exception) {
+            Log.e(TAG, "release multicast lock failed", e)
+        } finally {
+            multicastLock = null
+        }
+
+        try {
+            wifiLock?.let { lock ->
+                if (lock.isHeld) lock.release()
+            }
+            Log.d(TAG, "Wi-Fi high perf lock released")
+        } catch (e: Exception) {
+            Log.e(TAG, "release Wi-Fi lock failed", e)
+        } finally {
+            wifiLock = null
+        }
+    }
+
     @Suppress("DEPRECATION")
     private fun enterCommunicationMode(context: Context) {
         try {
@@ -240,9 +328,8 @@ object WalkieTalkieManager {
                 context.applicationContext.getSystemService(Context.AUDIO_SERVICE) as AudioManager
 
             audioManager.mode = AudioManager.MODE_IN_COMMUNICATION
-            audioManager.isSpeakerphoneOn = false
 
-            Log.d(TAG, "audio mode set MODE_IN_COMMUNICATION speakerOn=false")
+            Log.d(TAG, "audio mode set MODE_IN_COMMUNICATION")
         } catch (e: Exception) {
             Log.e(TAG, "enter communication mode failed", e)
         }
@@ -253,26 +340,6 @@ object WalkieTalkieManager {
         try {
             val audioManager =
                 context.applicationContext.getSystemService(Context.AUDIO_SERVICE) as AudioManager
-
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                try {
-                    audioManager.clearCommunicationDevice()
-                } catch (_: Exception) {
-                }
-            } else {
-                val shouldStopSco = legacyScoStartRequested
-                legacyScoStartRequested = false
-                if (shouldStopSco) {
-                    thread(name = "walkie-bt-sco-stop") {
-                        try {
-                            audioManager.stopBluetoothSco()
-                            Log.d(TAG, "legacy bluetooth SCO stop requested")
-                        } catch (e: Exception) {
-                            Log.e(TAG, "legacy bluetooth SCO stop failed", e)
-                        }
-                    }
-                }
-            }
 
             audioManager.mode = AudioManager.MODE_NORMAL
             audioManager.isSpeakerphoneOn = false
@@ -311,6 +378,9 @@ object WalkieTalkieManager {
             return false
         }
 
+        routeCommunicationAudioDevice(context)
+        waitForBluetoothRouteIfNeeded(context)
+
         if (isTransmitting) {
             return true
         }
@@ -318,8 +388,11 @@ object WalkieTalkieManager {
         isTransmitting = true
 
         thread(name = "walkie-transmit") {
+            Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_AUDIO)
+
             var audioRecord: AudioRecord? = null
             var encoder: OpusCodec? = null
+            var echoCanceler: AcousticEchoCanceler? = null
 
             try {
                 val minBuffer = AudioRecord.getMinBufferSize(
@@ -328,12 +401,19 @@ object WalkieTalkieManager {
                     AudioFormat.ENCODING_PCM_16BIT
                 )
 
+                val bluetoothActive = isBluetoothCommunicationActive(context)
+                val audioSource = if (bluetoothActive) {
+                    MediaRecorder.AudioSource.VOICE_RECOGNITION
+                } else {
+                    MediaRecorder.AudioSource.VOICE_COMMUNICATION
+                }
+
                 audioRecord = AudioRecord(
-                    MediaRecorder.AudioSource.VOICE_COMMUNICATION,
+                    audioSource,
                     SAMPLE_RATE,
                     AudioFormat.CHANNEL_IN_MONO,
                     AudioFormat.ENCODING_PCM_16BIT,
-                    max(minBuffer * AUDIO_BUFFER_MULTIPLIER, FRAME_BYTES * RECORD_BUFFER_MIN_FRAMES)
+                    max(minBuffer, FRAME_BYTES * 8)
                 )
 
                 if (audioRecord.state != AudioRecord.STATE_INITIALIZED) {
@@ -342,10 +422,21 @@ object WalkieTalkieManager {
                     return@thread
                 }
 
-                // MIUI Android 11 일부 기기에서 platform AcousticEchoCanceler 생성/설정 중
-                // 오디오 HAL 지연과 ANR이 발생할 수 있어 비활성화합니다.
-                // WebRtcAudioProcessor가 별도로 AEC/NS를 처리하므로 통신 포맷은 유지됩니다.
-                Log.d(TAG, "Platform AcousticEchoCanceler skipped for MIUI stability")
+                if (!bluetoothActive && AcousticEchoCanceler.isAvailable()) {
+                    echoCanceler = AcousticEchoCanceler.create(audioRecord.audioSessionId)
+                    echoCanceler?.enabled = true
+                    Log.d(TAG, "AcousticEchoCanceler enabled=${echoCanceler?.enabled}")
+                } else {
+                    Log.d(
+                        TAG,
+                        "AcousticEchoCanceler skipped bluetoothActive=$bluetoothActive available=${AcousticEchoCanceler.isAvailable()}"
+                    )
+                }
+
+                Log.d(
+                    TAG,
+                    "AudioRecord source=$audioSource bluetoothActive=$bluetoothActive minBuffer=$minBuffer buffer=${max(minBuffer, FRAME_BYTES * 8)}"
+                )
 
                 encoder = OpusCodec(
                     sampleRate = SAMPLE_RATE,
@@ -371,7 +462,9 @@ object WalkieTalkieManager {
                         continue
                     }
 
-                    processor?.processCaptureFrameInPlace(pcmFrame)
+                    if (!bluetoothActive) {
+                        processor?.processCaptureFrameInPlace(pcmFrame)
+                    }
 
                     val opusBytes = encoder.encodePcm(pcmFrame)
 
@@ -385,6 +478,10 @@ object WalkieTalkieManager {
             } catch (e: Exception) {
                 Log.e(TAG, "transmit failed", e)
             } finally {
+                try {
+                    echoCanceler?.release()
+                } catch (_: Exception) {
+                }
 
                 try {
                     audioRecord?.stop()
@@ -437,10 +534,27 @@ object WalkieTalkieManager {
                 return
             }
 
+            val seq = sequence and 0xffff
+            sequence = (sequence + 1) and 0xffff
+
+            val currentFrame = EncodedAudioFrame(seq, opusBytes.copyOf())
+            val redundantPayload = buildRedundantPayload(currentFrame)
+
+            if (redundantPayload.isEmpty() || redundantPayload.size > MAX_PAYLOAD_BYTES) {
+                Log.d(TAG, "redundant payload too large size=${redundantPayload.size}. send current only")
+            }
+
+            val payload = if (redundantPayload.isNotEmpty() && redundantPayload.size <= MAX_PAYLOAD_BYTES) {
+                redundantPayload
+            } else {
+                opusBytes
+            }
+
             val packetBytes = buildPacket(
                 senderWorkerId = senderWorkerId,
                 target = target,
-                payload = opusBytes
+                payload = payload,
+                seq = seq
             )
 
             val address = broadcastAddress
@@ -454,15 +568,62 @@ object WalkieTalkieManager {
             )
 
             socket.send(packet)
+            rememberTransmittedFrame(currentFrame)
         } catch (e: Exception) {
             Log.e(TAG, "send failed", e)
         }
     }
 
+    private fun rememberTransmittedFrame(frame: EncodedAudioFrame) {
+        synchronized(transmitHistory) {
+            transmitHistory.addLast(frame)
+
+            while (transmitHistory.size > REDUNDANT_HISTORY_FRAMES) {
+                transmitHistory.removeFirst()
+            }
+        }
+    }
+
+    private fun buildRedundantPayload(currentFrame: EncodedAudioFrame): ByteArray {
+        val frames = ArrayList<EncodedAudioFrame>(REDUNDANT_MAX_FRAMES_PER_PACKET)
+
+        synchronized(transmitHistory) {
+            frames.addAll(transmitHistory)
+        }
+
+        frames.add(currentFrame)
+
+        val totalSize = 2 + frames.sumOf { 4 + it.opusBytes.size }
+        if (totalSize > MAX_PAYLOAD_BYTES) {
+            return ByteArray(0)
+        }
+
+        val payload = ByteArray(totalSize)
+        var index = 0
+
+        payload[index++] = REDUNDANT_PAYLOAD_MAGIC.toByte()
+        payload[index++] = frames.size.toByte()
+
+        for (frame in frames) {
+            val length = frame.opusBytes.size
+
+            payload[index++] = (frame.seq and 0xff).toByte()
+            payload[index++] = ((frame.seq shr 8) and 0xff).toByte()
+            payload[index++] = (length and 0xff).toByte()
+            payload[index++] = ((length shr 8) and 0xff).toByte()
+
+            System.arraycopy(frame.opusBytes, 0, payload, index, length)
+            index += length
+        }
+
+        return payload
+    }
+
     private fun buildPacket(
         senderWorkerId: String,
         target: WalkieTarget,
-        payload: ByteArray
+        payload: ByteArray,
+        seq: Int
     ): ByteArray {
         val senderBytes = senderWorkerId.toByteArray(Charsets.UTF_8)
         val targetWorkerBytes =
@@ -499,10 +660,8 @@ object WalkieTalkieManager {
         packet[index++] = CHANNEL_ID.toByte()
         packet[index++] = targetType.toByte()
 
-        val seq = sequence and 0xffff
         packet[index++] = (seq and 0xff).toByte()
         packet[index++] = ((seq shr 8) and 0xff).toByte()
-        sequence = (sequence + 1) and 0xffff
 
         packet[index++] = senderBytes.size.toByte()
         System.arraycopy(senderBytes, 0, packet, index, senderBytes.size)
@@ -538,6 +697,8 @@ object WalkieTalkieManager {
         isReceiverRunning = true
 
         thread(name = "walkie-receiver") {
+            Process.setThreadPriority(Process.THREAD_PRIORITY_AUDIO)
+
             val buffer = ByteArray(2048)
 
             Log.d(TAG, "receiver started")
@@ -600,16 +761,97 @@ object WalkieTalkieManager {
             if (packet.payload.isEmpty()) return
             if (packet.payload.size > MAX_PAYLOAD_BYTES) return
 
-            val decodedPcm =
-                opusDecoder?.decodeToPcm(packet.payload) ?: return
+            val frames = parseRedundantPayload(packet.payload)
+                ?: listOf(EncodedAudioFrame(packet.seq, packet.payload))
 
-            if (decodedPcm.isEmpty()) return
+            for (frame in frames) {
+                if (frame.opusBytes.isEmpty()) continue
+                if (frame.opusBytes.size > MAX_PAYLOAD_BYTES) continue
+                if (shouldDropDuplicateOrOldPacket(packet.senderWorkerId, frame.seq)) continue
 
-            audioProcessor?.processRenderFrame(decodedPcm)
+                val decodedPcm =
+                    opusDecoder?.decodeToPcm(frame.opusBytes) ?: continue
 
-            enqueuePlayback(decodedPcm)
+                if (decodedPcm.isEmpty()) continue
+
+                // Render processing is only an AEC reference. Do not let APM mutate the PCM that is played.
+                if (audioProcessor != null) {
+                    audioProcessor?.processRenderFrame(decodedPcm.copyOf())
+                }
+
+                enqueuePlayback(decodedPcm)
+            }
         } catch (e: Exception) {
             Log.e(TAG, "handle packet failed", e)
+        }
+    }
+
+    private fun parseRedundantPayload(payload: ByteArray): List<EncodedAudioFrame>? {
+        if (payload.size < 2) return null
+        if ((payload[0].toInt() and 0xff) != REDUNDANT_PAYLOAD_MAGIC) return null
+
+        val frameCount = payload[1].toInt() and 0xff
+        if (frameCount <= 0 || frameCount > REDUNDANT_MAX_FRAMES_PER_PACKET) return null
+
+        val frames = ArrayList<EncodedAudioFrame>(frameCount)
+        var index = 2
+
+        repeat(frameCount) {
+            if (index + 4 > payload.size) return null
+
+            val seq = (payload[index].toInt() and 0xff) or
+                    ((payload[index + 1].toInt() and 0xff) shl 8)
+            val length = (payload[index + 2].toInt() and 0xff) or
+                    ((payload[index + 3].toInt() and 0xff) shl 8)
+            index += 4
+
+            if (length <= 0 || length > MAX_PAYLOAD_BYTES) return null
+            if (index + length > payload.size) return null
+
+            frames.add(EncodedAudioFrame(seq, payload.copyOfRange(index, index + length)))
+            index += length
+        }
+
+        if (index != payload.size) return null
+
+        return frames
+    }
+
+    private fun shouldDropDuplicateOrOldPacket(
+        senderWorkerId: String,
+        seq: Int
+    ): Boolean {
+        synchronized(lastSeqBySender) {
+            val lastSeq = lastSeqBySender[senderWorkerId]
+
+            if (lastSeq == null) {
+                lastSeqBySender[senderWorkerId] = seq
+                return false
+            }
+
+            val diff = (seq - lastSeq + 65536) and 0xffff
+
+            return when {
+                diff == 0 -> {
+                    true
+                }
+
+                diff < 32768 -> {
+                    if (diff > 1) {
+                        Log.d(
+                            TAG,
+                            "packet gap sender=$senderWorkerId last=$lastSeq seq=$seq lost=${diff - 1}"
+                        )
+                    }
+                    lastSeqBySender[senderWorkerId] = seq
+                    false
+                }
+
+                else -> {
+                    Log.d(TAG, "packet old/reordered sender=$senderWorkerId last=$lastSeq seq=$seq")
+                    true
+                }
+            }
         }
     }
 
@@ -640,7 +882,7 @@ object WalkieTalkieManager {
                             .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
                             .build()
                     )
-                    .setBufferSizeInBytes(max(minBuffer * AUDIO_BUFFER_MULTIPLIER, FRAME_BYTES * PLAYBACK_BUFFER_MIN_FRAMES))
+                    .setBufferSizeInBytes(max(minBuffer * 2, FRAME_BYTES * 6))
                     .setTransferMode(AudioTrack.MODE_STREAM)
                     .build()
 
@@ -649,7 +891,7 @@ object WalkieTalkieManager {
 
                 playbackTrack = track
 
-                Log.d(TAG, "playback track started USAGE_VOICE_COMMUNICATION")
+                Log.d(TAG, "playback track started USAGE_VOICE_COMMUNICATION minBuffer=$minBuffer buffer=${max(minBuffer * 2, FRAME_BYTES * 6)}")
             } catch (e: Exception) {
                 playbackTrack = null
                 Log.e(TAG, "playback track init failed", e)
@@ -661,6 +903,7 @@ object WalkieTalkieManager {
         synchronized(playbackLock) {
             while (playbackQueue.size >= JITTER_BUFFER_MAX_FRAMES) {
                 playbackQueue.removeFirst()
+                Log.d(TAG, "playback queue overflow. drop oldest")
             }
 
             playbackQueue.addLast(pcmBytes)
@@ -674,28 +917,58 @@ object WalkieTalkieManager {
         isPlaybackRunning = true
 
         thread(name = "walkie-playback") {
+            Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_AUDIO)
+
             var bufferPrimed = false
+            var plcFrames = 0
 
             Log.d(TAG, "playback loop started")
 
             while (isPlaybackRunning) {
-                val frame: ByteArray? =
+                val queuedFrame: ByteArray? =
                     synchronized(playbackLock) {
                         if (!bufferPrimed) {
                             if (playbackQueue.size < JITTER_BUFFER_START_FRAMES) {
                                 null
                             } else {
                                 bufferPrimed = true
+                                plcFrames = 0
+
+                                while (playbackQueue.size > JITTER_BUFFER_TARGET_FRAMES) {
+                                    playbackQueue.removeFirst()
+                                }
+
                                 playbackQueue.removeFirst()
                             }
                         } else {
                             if (playbackQueue.isEmpty()) {
-                                bufferPrimed = false
                                 null
                             } else {
+                                plcFrames = 0
+
+                                while (playbackQueue.size > JITTER_BUFFER_TARGET_FRAMES) {
+                                    playbackQueue.removeFirst()
+                                    Log.d(TAG, "playback late. drop old frame to catch up")
+                                }
+
                                 playbackQueue.removeFirst()
                             }
                         }
+                    }
+
+                val frame =
+                    if (queuedFrame != null) {
+                        queuedFrame
+                    } else if (bufferPrimed && plcFrames < PLAYBACK_MAX_PLC_FRAMES) {
+                        plcFrames += 1
+                        opusDecoder?.decodePlcToPcm()
+                    } else {
+                        if (bufferPrimed) {
+                            Log.d(TAG, "playback underrun. re-prime after plcFrames=$plcFrames")
+                        }
+                        bufferPrimed = false
+                        plcFrames = 0
+                        null
                     }
 
                 if (frame == null) {
@@ -862,6 +1135,78 @@ object WalkieTalkieManager {
         }
     }
 
+    private fun isBluetoothCommunicationActive(context: Context): Boolean {
+        return try {
+            val audioManager =
+                context.applicationContext.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                val device = audioManager.communicationDevice
+                device?.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO ||
+                        device?.type == AudioDeviceInfo.TYPE_BLE_HEADSET
+            } else {
+                @Suppress("DEPRECATION")
+                audioManager.isBluetoothScoOn
+            }
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    @Suppress("DEPRECATION")
+    private fun waitForBluetoothRouteIfNeeded(
+        context: Context,
+        timeoutMs: Long = 1800L
+    ) {
+        try {
+            val audioManager =
+                context.applicationContext.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+
+            if (!hasBluetoothConnectPermission(context)) return
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                val hasBluetoothCommunicationDevice =
+                    audioManager.availableCommunicationDevices.any { device ->
+                        device.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO ||
+                                device.type == AudioDeviceInfo.TYPE_BLE_HEADSET
+                    }
+
+                if (!hasBluetoothCommunicationDevice) return
+
+                val deadline = SystemClock.elapsedRealtime() + timeoutMs
+                while (SystemClock.elapsedRealtime() < deadline) {
+                    if (isBluetoothCommunicationActive(context)) {
+                        Log.d(TAG, "bluetooth communication route ready")
+                        return
+                    }
+                    Thread.sleep(50L)
+                }
+
+                Log.d(TAG, "bluetooth communication route wait timeout")
+            } else {
+                val hasBluetoothSco =
+                    audioManager.getDevices(AudioManager.GET_DEVICES_OUTPUTS).any { device ->
+                        device.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO
+                    }
+
+                if (!hasBluetoothSco) return
+
+                val deadline = SystemClock.elapsedRealtime() + timeoutMs
+                while (SystemClock.elapsedRealtime() < deadline) {
+                    if (audioManager.isBluetoothScoOn) {
+                        Log.d(TAG, "legacy bluetooth SCO route ready")
+                        return
+                    }
+                    Thread.sleep(50L)
+                }
+
+                Log.d(TAG, "legacy bluetooth SCO route wait timeout")
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "wait for bluetooth route failed", e)
+        }
+    }
+
     private fun hasBluetoothConnectPermission(context: Context): Boolean {
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             ContextCompat.checkSelfPermission(
@@ -875,13 +1220,6 @@ object WalkieTalkieManager {
 
     private fun registerAudioDeviceCallback(context: Context) {
         if (audioDeviceCallback != null) return
-
-        // Android 11 / MIUI에서는 AudioDeviceCallback에서 라우팅을 반복하면
-        // Volume/SCO 상태 변경과 맞물려 MainActivity ANR이 날 수 있습니다.
-        // 그래서 Android 12 이상에서만 동적 장치 콜백을 사용합니다.
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
-            return
-        }
 
         val audioManager =
             context.applicationContext.getSystemService(Context.AUDIO_SERVICE) as AudioManager
@@ -915,18 +1253,6 @@ object WalkieTalkieManager {
             Log.e(TAG, "unregister audio device callback failed", e)
         } finally {
             audioDeviceCallback = null
-        }
-    }
-
-
-
-    private fun hasLegacyBluetoothScoOutput(audioManager: AudioManager): Boolean {
-        return try {
-            audioManager.getDevices(AudioManager.GET_DEVICES_OUTPUTS).any { device ->
-                device.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO
-            }
-        } catch (_: Exception) {
-            false
         }
     }
 
@@ -967,33 +1293,22 @@ object WalkieTalkieManager {
                     Log.d(TAG, "no bluetooth communication device. speaker output used")
                 }
             } else {
-                val hasBluetoothSco = hasLegacyBluetoothScoOutput(audioManager)
+                val hasBluetoothSco =
+                    audioManager.getDevices(AudioManager.GET_DEVICES_OUTPUTS).any { device ->
+                        device.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO
+                    }
 
                 if (hasBluetoothSco) {
                     audioManager.isSpeakerphoneOn = false
+                    audioManager.startBluetoothSco()
+                    audioManager.isBluetoothScoOn = true
 
-                    if (!legacyScoStartRequested) {
-                        legacyScoStartRequested = true
-
-                        // Android 11에서는 블루투스 이어폰 출력을 위해 SCO 요청이 필요합니다.
-                        // 다만 Redmi/MIUI는 메인 스레드에서 반복 호출하면 ANR이 나므로
-                        // 앱 시작/통화 진입 시 1회만 백그라운드에서 요청합니다.
-                        thread(name = "walkie-bt-sco-start") {
-                            try {
-                                audioManager.mode = AudioManager.MODE_IN_COMMUNICATION
-                                audioManager.isSpeakerphoneOn = false
-                                audioManager.startBluetoothSco()
-                                Log.d(TAG, "legacy bluetooth SCO start requested once")
-                            } catch (e: Exception) {
-                                legacyScoStartRequested = false
-                                Log.e(TAG, "legacy bluetooth SCO start failed", e)
-                            }
-                        }
-                    } else {
-                        Log.d(TAG, "legacy bluetooth SCO already requested. skip")
-                    }
+                    Log.d(TAG, "legacy bluetooth SCO started")
                 } else {
+                    audioManager.stopBluetoothSco()
+                    audioManager.isBluetoothScoOn = false
                     audioManager.isSpeakerphoneOn = true
+
                     Log.d(TAG, "legacy bluetooth SCO not found. speaker output used")
                 }
             }

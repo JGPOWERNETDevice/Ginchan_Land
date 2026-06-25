@@ -40,7 +40,7 @@ class OpusCodec(
             byteIndex += 2
         }
 
-        val encodedBuffer = ByteArray(400)
+        val encodedBuffer = ByteArray(1024)
 
         val encodedBytes = encoder.encode(
             pcmShorts,
@@ -81,4 +81,33 @@ class OpusCodec(
 
         return pcmBytes
     }
+
+    fun decodePlcToPcm(): ByteArray {
+        val decodedShorts = ShortArray(frameSamples)
+
+        val decodedSamples = decoder.decode(
+            null,
+            0,
+            0,
+            decodedShorts,
+            0,
+            frameSamples,
+            false
+        )
+
+        val pcmBytes = ByteArray(decodedSamples * 2)
+
+        var byteIndex = 0
+        for (i in 0 until decodedSamples) {
+            val sample = decodedShorts[i].toInt()
+
+            pcmBytes[byteIndex] = (sample and 0xff).toByte()
+            pcmBytes[byteIndex + 1] = ((sample shr 8) and 0xff).toByte()
+
+            byteIndex += 2
+        }
+
+        return pcmBytes
+    }
+
 }
