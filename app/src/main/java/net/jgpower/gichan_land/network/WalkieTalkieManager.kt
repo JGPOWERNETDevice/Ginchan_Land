@@ -10,7 +10,6 @@ import android.media.AudioManager
 import android.media.AudioRecord
 import android.media.AudioTrack
 import android.media.MediaRecorder
-import android.media.audiofx.AcousticEchoCanceler
 import android.net.wifi.WifiManager
 import android.util.Log
 import androidx.core.content.ContextCompat
@@ -55,10 +54,13 @@ object WalkieTalkieManager {
 
     private const val MAX_PAYLOAD_BYTES = 1024
 
-    private const val JITTER_BUFFER_START_FRAMES = 2
-    private const val JITTER_BUFFER_MAX_FRAMES = 8
-    private const val PLAYBACK_IDLE_SLEEP_MS = 4L
+    private const val JITTER_BUFFER_START_FRAMES = 4
+    private const val JITTER_BUFFER_MAX_FRAMES = 16
+    private const val PLAYBACK_IDLE_SLEEP_MS = 5L
 
+    private const val AUDIO_BUFFER_MULTIPLIER = 4
+    private const val RECORD_BUFFER_MIN_FRAMES = 8
+    private const val PLAYBACK_BUFFER_MIN_FRAMES = 12
     private const val USE_WEBRTC_APM = true
 
     @Volatile
@@ -93,6 +95,9 @@ object WalkieTalkieManager {
 
     @Volatile
     private var audioDeviceCallback: AudioDeviceCallback? = null
+
+    @Volatile
+    private var legacyScoStartRequested = false
 
     @Volatile
     private var playbackTrack: AudioTrack? = null
@@ -235,9 +240,9 @@ object WalkieTalkieManager {
                 context.applicationContext.getSystemService(Context.AUDIO_SERVICE) as AudioManager
 
             audioManager.mode = AudioManager.MODE_IN_COMMUNICATION
-            audioManager.isSpeakerphoneOn = true
+            audioManager.isSpeakerphoneOn = false
 
-            Log.d(TAG, "audio mode set MODE_IN_COMMUNICATION speakerOn=true")
+            Log.d(TAG, "audio mode set MODE_IN_COMMUNICATION speakerOn=false")
         } catch (e: Exception) {
             Log.e(TAG, "enter communication mode failed", e)
         }
@@ -248,6 +253,26 @@ object WalkieTalkieManager {
         try {
             val audioManager =
                 context.applicationContext.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                try {
+                    audioManager.clearCommunicationDevice()
+                } catch (_: Exception) {
+                }
+            } else {
+                val shouldStopSco = legacyScoStartRequested
+                legacyScoStartRequested = false
+                if (shouldStopSco) {
+                    thread(name = "walkie-bt-sco-stop") {
+                        try {
+                            audioManager.stopBluetoothSco()
+                            Log.d(TAG, "legacy bluetooth SCO stop requested")
+                        } catch (e: Exception) {
+                            Log.e(TAG, "legacy bluetooth SCO stop failed", e)
+                        }
+                    }
+                }
+            }
 
             audioManager.mode = AudioManager.MODE_NORMAL
             audioManager.isSpeakerphoneOn = false
@@ -295,7 +320,6 @@ object WalkieTalkieManager {
         thread(name = "walkie-transmit") {
             var audioRecord: AudioRecord? = null
             var encoder: OpusCodec? = null
-            var echoCanceler: AcousticEchoCanceler? = null
 
             try {
                 val minBuffer = AudioRecord.getMinBufferSize(
@@ -309,7 +333,7 @@ object WalkieTalkieManager {
                     SAMPLE_RATE,
                     AudioFormat.CHANNEL_IN_MONO,
                     AudioFormat.ENCODING_PCM_16BIT,
-                    max(minBuffer, FRAME_BYTES * 4)
+                    max(minBuffer * AUDIO_BUFFER_MULTIPLIER, FRAME_BYTES * RECORD_BUFFER_MIN_FRAMES)
                 )
 
                 if (audioRecord.state != AudioRecord.STATE_INITIALIZED) {
@@ -318,13 +342,10 @@ object WalkieTalkieManager {
                     return@thread
                 }
 
-                if (AcousticEchoCanceler.isAvailable()) {
-                    echoCanceler = AcousticEchoCanceler.create(audioRecord.audioSessionId)
-                    echoCanceler?.enabled = true
-                    Log.d(TAG, "AcousticEchoCanceler enabled=${echoCanceler?.enabled}")
-                } else {
-                    Log.d(TAG, "AcousticEchoCanceler not available")
-                }
+                // MIUI Android 11 일부 기기에서 platform AcousticEchoCanceler 생성/설정 중
+                // 오디오 HAL 지연과 ANR이 발생할 수 있어 비활성화합니다.
+                // WebRtcAudioProcessor가 별도로 AEC/NS를 처리하므로 통신 포맷은 유지됩니다.
+                Log.d(TAG, "Platform AcousticEchoCanceler skipped for MIUI stability")
 
                 encoder = OpusCodec(
                     sampleRate = SAMPLE_RATE,
@@ -364,10 +385,6 @@ object WalkieTalkieManager {
             } catch (e: Exception) {
                 Log.e(TAG, "transmit failed", e)
             } finally {
-                try {
-                    echoCanceler?.release()
-                } catch (_: Exception) {
-                }
 
                 try {
                     audioRecord?.stop()
@@ -623,7 +640,7 @@ object WalkieTalkieManager {
                             .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
                             .build()
                     )
-                    .setBufferSizeInBytes(max(minBuffer, FRAME_BYTES * 4))
+                    .setBufferSizeInBytes(max(minBuffer * AUDIO_BUFFER_MULTIPLIER, FRAME_BYTES * PLAYBACK_BUFFER_MIN_FRAMES))
                     .setTransferMode(AudioTrack.MODE_STREAM)
                     .build()
 
@@ -859,6 +876,13 @@ object WalkieTalkieManager {
     private fun registerAudioDeviceCallback(context: Context) {
         if (audioDeviceCallback != null) return
 
+        // Android 11 / MIUI에서는 AudioDeviceCallback에서 라우팅을 반복하면
+        // Volume/SCO 상태 변경과 맞물려 MainActivity ANR이 날 수 있습니다.
+        // 그래서 Android 12 이상에서만 동적 장치 콜백을 사용합니다.
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
+            return
+        }
+
         val audioManager =
             context.applicationContext.getSystemService(Context.AUDIO_SERVICE) as AudioManager
 
@@ -891,6 +915,18 @@ object WalkieTalkieManager {
             Log.e(TAG, "unregister audio device callback failed", e)
         } finally {
             audioDeviceCallback = null
+        }
+    }
+
+
+
+    private fun hasLegacyBluetoothScoOutput(audioManager: AudioManager): Boolean {
+        return try {
+            audioManager.getDevices(AudioManager.GET_DEVICES_OUTPUTS).any { device ->
+                device.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO
+            }
+        } catch (_: Exception) {
+            false
         }
     }
 
@@ -931,22 +967,33 @@ object WalkieTalkieManager {
                     Log.d(TAG, "no bluetooth communication device. speaker output used")
                 }
             } else {
-                val hasBluetoothSco =
-                    audioManager.getDevices(AudioManager.GET_DEVICES_OUTPUTS).any { device ->
-                        device.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO
-                    }
+                val hasBluetoothSco = hasLegacyBluetoothScoOutput(audioManager)
 
                 if (hasBluetoothSco) {
                     audioManager.isSpeakerphoneOn = false
-                    audioManager.startBluetoothSco()
-                    audioManager.isBluetoothScoOn = true
 
-                    Log.d(TAG, "legacy bluetooth SCO started")
+                    if (!legacyScoStartRequested) {
+                        legacyScoStartRequested = true
+
+                        // Android 11에서는 블루투스 이어폰 출력을 위해 SCO 요청이 필요합니다.
+                        // 다만 Redmi/MIUI는 메인 스레드에서 반복 호출하면 ANR이 나므로
+                        // 앱 시작/통화 진입 시 1회만 백그라운드에서 요청합니다.
+                        thread(name = "walkie-bt-sco-start") {
+                            try {
+                                audioManager.mode = AudioManager.MODE_IN_COMMUNICATION
+                                audioManager.isSpeakerphoneOn = false
+                                audioManager.startBluetoothSco()
+                                Log.d(TAG, "legacy bluetooth SCO start requested once")
+                            } catch (e: Exception) {
+                                legacyScoStartRequested = false
+                                Log.e(TAG, "legacy bluetooth SCO start failed", e)
+                            }
+                        }
+                    } else {
+                        Log.d(TAG, "legacy bluetooth SCO already requested. skip")
+                    }
                 } else {
-                    audioManager.stopBluetoothSco()
-                    audioManager.isBluetoothScoOn = false
                     audioManager.isSpeakerphoneOn = true
-
                     Log.d(TAG, "legacy bluetooth SCO not found. speaker output used")
                 }
             }
