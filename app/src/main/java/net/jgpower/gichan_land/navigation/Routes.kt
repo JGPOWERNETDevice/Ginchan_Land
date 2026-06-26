@@ -8,4 +8,5 @@ object Routes {
 
     const val WALKIE_TALKIE = "walkie_talkie"
     const val T_WATCH = "t_watch"
+    const val GROUP_EDIT = "group_edit"
 }

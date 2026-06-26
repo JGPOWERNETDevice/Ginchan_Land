@@ -55,6 +55,7 @@ fun MainScreen(
     onNoticeClick: () -> Unit,
     onWalkieTalkieClick: () -> Unit,
     onWatchConnectClick: () -> Unit,
+    onGroupEditClick: () -> Unit,
     onLogoutClick: () -> Unit,
     onExitAppClick: () -> Unit
 ) {
@@ -187,11 +188,18 @@ fun MainScreen(
         loadPresenceStatus()
 
         try {
-            val workers = ApiServiceManager.apiService.getOnlineWorkers()
-            myGroupNames.value = workers
-                .firstOrNull { it.workerId?.trim() == workerId.trim() }
-                ?.groupNamesText()
-                .orEmpty()
+            val response = ApiServiceManager.apiService.getMyGroups(workerId)
+            if (response.isSuccessful) {
+                val body = response.body()
+                myGroupNames.value = body?.data
+                    ?.groups
+                    .orEmpty()
+                    .joinToString(", ") { group ->
+                        group.groupName.ifBlank { group.groupCode }
+                    }
+            } else {
+                myGroupNames.value = ""
+            }
         } catch (_: Exception) {
             myGroupNames.value = ""
         }
@@ -328,6 +336,15 @@ fun MainScreen(
             modifier = Modifier.fillMaxWidth()
         ) {
             Text("워치 연결")
+        }
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        Button(
+            onClick = onGroupEditClick,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text("그룹 수정")
         }
 
         Spacer(modifier = Modifier.height(12.dp))

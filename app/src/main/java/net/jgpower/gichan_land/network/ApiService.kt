@@ -23,6 +23,9 @@ import net.jgpower.gichan_land.data.event.EventTypeItem
 import net.jgpower.gichan_land.data.textalert.TextAlertListResponse
 import net.jgpower.gichan_land.data.area.AreaTypeItem
 import net.jgpower.gichan_land.data.walkie.OnlineWorkerDto
+import net.jgpower.gichan_land.data.group.AppGroupPatchRequest
+import net.jgpower.gichan_land.data.group.AppGroupPatchResponse
+import net.jgpower.gichan_land.data.group.MyGroupsResponse
 
 
 
@@ -94,5 +97,15 @@ interface ApiService {
 
     @GET("api/monitor/online-workers")
     suspend fun getOnlineWorkers(): List<OnlineWorkerDto>
+
+    @GET("api/app/groups/mine")
+    suspend fun getMyGroups(
+        @Query("workerId") workerId: String
+    ): Response<MyGroupsResponse>
+
+    @POST("api/app/groups/patch")
+    suspend fun patchMyGroups(
+        @Body request: AppGroupPatchRequest
+    ): Response<AppGroupPatchResponse>
 
 }

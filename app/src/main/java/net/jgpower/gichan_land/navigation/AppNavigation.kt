@@ -52,6 +52,7 @@ import net.jgpower.gichan_land.ui.action_report.ActionReportScreen
 import net.jgpower.gichan_land.ui.alert_detail.AlertDetailScreen
 import net.jgpower.gichan_land.ui.components.AppAlertPopupHost
 import net.jgpower.gichan_land.ui.event_create.EventCreateScreen
+import net.jgpower.gichan_land.ui.group.GroupEditScreen
 import net.jgpower.gichan_land.ui.main.MainScreen
 import net.jgpower.gichan_land.ui.notice.NoticeScreen
 import net.jgpower.gichan_land.ui.signin.SignInScreen
@@ -71,6 +72,7 @@ object Routes {
     const val NOTICE = "notice"
     const val WALKIE_TALKIE = "walkie_talkie"
     const val T_WATCH = "t_watch"
+    const val GROUP_EDIT = "group_edit"
 }
 
 @Composable
@@ -350,6 +352,9 @@ fun AppNavigation(
                 onWatchConnectClick = {
                     currentRoute.value = Routes.T_WATCH
                 },
+                onGroupEditClick = {
+                    currentRoute.value = Routes.GROUP_EDIT
+                },
                 onLogoutClick = {
                     val workerId = loginWorkerId.value
 
@@ -480,6 +485,18 @@ fun AppNavigation(
             TWatchConnectScreen(
                 onBackClick = {
                     currentRoute.value = Routes.MAIN
+                }
+            )
+        }
+
+        Routes.GROUP_EDIT -> {
+            GroupEditScreen(
+                workerId = loginWorkerId.value,
+                onBackClick = {
+                    currentRoute.value = Routes.MAIN
+                },
+                onGroupsChanged = {
+                    startWalkieReceiver(loginWorkerId.value)
                 }
             )
         }
