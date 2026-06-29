@@ -16,6 +16,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
@@ -44,6 +45,7 @@ import net.jgpower.gichan_land.network.ApiServiceManager
 import net.jgpower.gichan_land.network.AppWebSocketManager
 import net.jgpower.gichan_land.repository.AlertRepository
 import net.jgpower.gichan_land.repository.EmergencyRepository
+import net.jgpower.gichan_land.repository.EventRepository
 import net.jgpower.gichan_land.service.AppNotificationManager
 
 @Composable
@@ -68,6 +70,8 @@ fun MainScreen(
     val errorMessage = remember { mutableStateOf<String?>(null) }
     val isLoading = remember { mutableStateOf(false) }
     val myGroupNames = remember { mutableStateOf("") }
+    val sosMessage = remember { mutableStateOf<String?>(null) }
+    val isSosReporting = remember { mutableStateOf(false) }
 
     val statusOptions = listOf("조치 전", "조치 중", "중앙 확인 중", "조치 완료")
 
@@ -91,6 +95,10 @@ fun MainScreen(
 
     val emergencyRepository = remember {
         EmergencyRepository(ApiServiceManager.apiService)
+    }
+
+    val eventRepository = remember {
+        EventRepository(ApiServiceManager.apiService)
     }
 
     val emergencyPresence by EmergencyPresenceState.state.collectAsState()
@@ -205,6 +213,33 @@ fun MainScreen(
         }
     }
 
+
+    fun reportSosEvent() {
+        if (isSosReporting.value) return
+
+        coroutineScope.launch {
+            isSosReporting.value = true
+            sosMessage.value = null
+            errorMessage.value = null
+
+            try {
+                val response = eventRepository.createSosEvent(workerId)
+
+                if (response.isSuccessful) {
+                    sosMessage.value = "" +
+                            "SOS 현장 구조 상황이 즉시 보고되었습니다."
+                    loadAlerts()
+                } else {
+                    errorMessage.value = "SOS 보고 실패: ${response.code()}"
+                }
+            } catch (_: Exception) {
+                errorMessage.value = "서버에 연결할 수 없습니다."
+            } finally {
+                isSosReporting.value = false
+            }
+        }
+    }
+
     LaunchedEffect(workerId) {
         loadAlerts()
         loadPresenceStatus()
@@ -313,11 +348,38 @@ fun MainScreen(
 
         Spacer(modifier = Modifier.height(20.dp))
 
+        /*
         Button(
             onClick = onCreateEventClick,
             modifier = Modifier.fillMaxWidth()
         ) {
             Text("상황 발견 보고")
+        }
+
+        Spacer(modifier = Modifier.height(12.dp))
+        */
+
+        Button(
+            onClick = {
+                reportSosEvent()
+            },
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(56.dp),
+            enabled = !isSosReporting.value,
+            colors = ButtonDefaults.buttonColors(
+                containerColor = MaterialTheme.colorScheme.error,
+                contentColor = MaterialTheme.colorScheme.onError
+            )
+        ) {
+            Text(if (isSosReporting.value) "SOS 보고 중..." else "SOS")
+        }
+
+        sosMessage.value?.let {
+            Text(
+                text = it,
+                color = MaterialTheme.colorScheme.primary
+            )
         }
 
         Spacer(modifier = Modifier.height(12.dp))

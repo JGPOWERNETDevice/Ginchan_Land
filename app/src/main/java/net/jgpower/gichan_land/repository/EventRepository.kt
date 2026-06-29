@@ -18,7 +18,7 @@ class EventRepository(
 
     suspend fun createEvent(
         eventType: String,
-        areaCode: String,
+        areaCode: String?,
         targetType: String?,
         workerId: String
     ) = apiService.createEvent(
@@ -26,6 +26,17 @@ class EventRepository(
             eventType = eventType,
             areaCode = areaCode,
             targetType = targetType,
+            workerId = workerId
+        )
+    )
+
+    suspend fun createSosEvent(
+        workerId: String
+    ) = apiService.createEvent(
+        EventCreateRequest(
+            eventType = "sos",
+            areaCode = null,
+            targetType = null,
             workerId = workerId
         )
     )
