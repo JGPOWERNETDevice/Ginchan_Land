@@ -20,6 +20,14 @@ object ServerConfig {
         }
     }
 
+    fun getLocalBaseHttpUrl(): String {
+        return LOCAL_HTTP_URL
+    }
+
+    fun getPublicBaseHttpUrl(): String {
+        return PUBLIC_HTTP_URL
+    }
+
     fun getWebSocketUrl(context: Context): String {
         return if (isWifi(context)) {
             LOCAL_WS_URL

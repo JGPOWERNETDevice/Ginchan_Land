@@ -163,9 +163,12 @@ fun GroupEditScreen(
     fun launchQrScanner() {
         val options = ScanOptions().apply {
             setDesiredBarcodeFormats(ScanOptions.QR_CODE)
-            setPrompt("그룹 QR 코드를 스캔하세요")
+            setPrompt("그룹 QR 코드를 화면 중앙에 맞추세요")
             setBeepEnabled(false)
-            setOrientationLocked(false)
+            setOrientationLocked(true)
+            setCaptureActivity(PortraitCaptureActivity::class.java)
+            setCameraId(0)
+            setBarcodeImageEnabled(false)
         }
         qrScannerLauncher.launch(options)
     }

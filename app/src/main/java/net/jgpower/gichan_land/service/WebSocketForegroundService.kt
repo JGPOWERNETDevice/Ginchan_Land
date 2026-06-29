@@ -610,10 +610,7 @@ class WebSocketForegroundService : Service() {
         val callId = WalkieGlobalState.activeCallId.value
         val isEmergency = WalkieGlobalState.isEmergencyBroadcastActive.value
 
-        val openPendingIntent = createServicePendingIntent(
-            action = ACTION_OPEN_WALKIE,
-            requestCode = 3001
-        )
+        val openPendingIntent = createOpenWalkiePendingIntent()
 
         val builder = NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_launcher_foreground)
@@ -652,6 +649,15 @@ class WebSocketForegroundService : Service() {
             setTextViewText(R.id.walkie_notification_body, "상대: $peer / $micText")
             setImageViewResource(R.id.walkie_notification_mic_button, R.drawable.ic_walkie_mic_24)
             setImageViewResource(R.id.walkie_notification_end_button, R.drawable.ic_walkie_call_end_24)
+            val openPendingIntent = createOpenWalkiePendingIntent()
+            setOnClickPendingIntent(
+                R.id.walkie_notification_title,
+                openPendingIntent
+            )
+            setOnClickPendingIntent(
+                R.id.walkie_notification_body,
+                openPendingIntent
+            )
             setOnClickPendingIntent(
                 R.id.walkie_notification_mic_button,
                 createServicePendingIntent(ACTION_TOGGLE_MIC, 3002)
@@ -661,6 +667,23 @@ class WebSocketForegroundService : Service() {
                 createServicePendingIntent(ACTION_END_CALL, 3003)
             )
         }
+    }
+
+    private fun createOpenWalkiePendingIntent(): PendingIntent {
+        val intent = Intent(this, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_CLEAR_TOP or
+                    Intent.FLAG_ACTIVITY_SINGLE_TOP or
+                    Intent.FLAG_ACTIVITY_NEW_TASK
+            putExtra("openWalkie", true)
+            walkieWorkerId?.let { putExtra(EXTRA_WORKER_ID, it) }
+        }
+
+        return PendingIntent.getActivity(
+            this,
+            3001,
+            intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
     }
 
     private fun createServicePendingIntent(action: String, requestCode: Int): PendingIntent {

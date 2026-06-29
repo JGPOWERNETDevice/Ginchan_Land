@@ -2,6 +2,7 @@ package net.jgpower.gichan_land.ui.watch
 
 import android.Manifest
 import android.os.Build
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
@@ -37,6 +38,11 @@ fun TWatchConnectScreen(
 ) {
     val context = LocalContext.current
     val state by TWatchBleNotifier.uiState.collectAsState()
+
+    BackHandler {
+        TWatchBleNotifier.stopScanForSelection()
+        onBackClick()
+    }
 
     val permissions = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
         arrayOf(

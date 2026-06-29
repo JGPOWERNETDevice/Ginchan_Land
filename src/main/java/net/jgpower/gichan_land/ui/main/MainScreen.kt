@@ -45,7 +45,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import org.json.JSONObject
 import net.jgpower.gichan_land.data.alert.WorkerAlert
 import net.jgpower.gichan_land.data.emergency.EmergencyPresenceState
 import net.jgpower.gichan_land.network.ApiServiceManager
@@ -238,21 +237,10 @@ fun MainScreen(
                     sosMessage.value = "SOS 현장 구조 상황이 보고되었습니다."
                     loadAlerts()
                 } else {
-                    val errorText = response.errorBody()?.string().orEmpty()
-                    val serverMessage = try {
-                        JSONObject(errorText).optString("message")
-                    } catch (_: Exception) {
-                        ""
-                    }
-
-                    errorMessage.value = if (serverMessage.isNotBlank()) {
-                        "SOS 보고 실패: $serverMessage"
-                    } else {
-                        "SOS 보고 실패: ${response.code()}"
-                    }
+                    errorMessage.value = "SOS 보고 실패: ${response.code()}"
                 }
-            } catch (e: Exception) {
-                errorMessage.value = "서버에 연결할 수 없습니다. 데이터망에서 외부 Node-RED 주소/포트 접속을 확인하세요."
+            } catch (_: Exception) {
+                errorMessage.value = "서버에 연결할 수 없습니다."
             } finally {
                 isSosReporting.value = false
             }
