@@ -93,6 +93,7 @@ fun AppNavigation(
     val loginWorkerId = remember { mutableStateOf("") }
     val selectedAlertId = remember { mutableStateOf("") }
     val isCheckingLogin = remember { mutableStateOf(true) }
+    val groupRefreshKey = remember { mutableStateOf(0) }
 
     val coroutineScope = rememberCoroutineScope()
 
@@ -332,6 +333,7 @@ fun AppNavigation(
         Routes.MAIN -> {
             MainScreen(
                 workerId = loginWorkerId.value,
+                groupRefreshKey = groupRefreshKey.value,
                 onAlertClick = { alertId ->
                     selectedAlertId.value = alertId
                     currentRoute.value = Routes.ALERT_DETAIL
@@ -496,6 +498,7 @@ fun AppNavigation(
                     currentRoute.value = Routes.MAIN
                 },
                 onGroupsChanged = {
+                    groupRefreshKey.value += 1
                     startWalkieReceiver(loginWorkerId.value)
                 }
             )

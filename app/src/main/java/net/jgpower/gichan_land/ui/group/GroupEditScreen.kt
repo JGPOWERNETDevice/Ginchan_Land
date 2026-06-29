@@ -98,8 +98,13 @@ fun GroupEditScreen(
             try {
                 val response = repository.addGroup(workerId, groupCode)
                 if (response.success) {
+                    val freshResponse = repository.getMyGroups(workerId)
                     groups.clear()
-                    groups.addAll(response.data?.groups.orEmpty())
+                    groups.addAll(
+                        freshResponse.data?.groups
+                            ?: response.data?.groups
+                            ?: emptyList()
+                    )
                     statusMessage.value = "그룹이 추가되었습니다: $groupCode"
                     onGroupsChanged()
                 } else {
@@ -126,8 +131,13 @@ fun GroupEditScreen(
             try {
                 val response = repository.removeGroup(workerId, groupCode)
                 if (response.success) {
+                    val freshResponse = repository.getMyGroups(workerId)
                     groups.clear()
-                    groups.addAll(response.data?.groups.orEmpty())
+                    groups.addAll(
+                        freshResponse.data?.groups
+                            ?: response.data?.groups
+                            ?: emptyList()
+                    )
                     statusMessage.value = "그룹이 삭제되었습니다: $groupCode"
                     onGroupsChanged()
                 } else {
@@ -331,7 +341,7 @@ private fun GroupListItem(
 }
 
 private fun extractGroupCodeFromQr(raw: String): String {
-    val text = raw.trim()
+    val text = sanitizeQrRawText(raw)
     if (text.isBlank()) return ""
 
     runCatching {
@@ -362,9 +372,22 @@ private fun extractGroupCodeFromQr(raw: String): String {
     return sanitizeGroupCode(text)
 }
 
-private fun sanitizeGroupCode(value: String): String {
+private fun sanitizeQrRawText(value: String): String {
     return value
+        .replace("\uFEFF", "")
+        .replace("\u200B", "")
+        .replace("\u200C", "")
+        .replace("\u200D", "")
+        .replace("\u2060", "")
+        .replace("\u00A0", " ")
+        .replace("\r", "")
+        .replace("\n", "")
+        .replace(Regex("<[^>]+>"), "")
         .trim()
+}
+
+private fun sanitizeGroupCode(value: String): String {
+    return sanitizeQrRawText(value)
         .removePrefix("\"")
         .removeSuffix("\"")
         .trim()

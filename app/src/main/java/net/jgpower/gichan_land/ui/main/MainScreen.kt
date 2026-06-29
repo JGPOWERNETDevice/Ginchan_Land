@@ -49,6 +49,7 @@ import net.jgpower.gichan_land.service.AppNotificationManager
 @Composable
 fun MainScreen(
     workerId: String,
+    groupRefreshKey: Int = 0,
     onAlertClick: (String) -> Unit,
     onActionReportClick: (String) -> Unit,
     onCreateEventClick: () -> Unit,
@@ -183,26 +184,34 @@ fun MainScreen(
         }
     }
 
+    fun loadMyGroups() {
+        coroutineScope.launch {
+            try {
+                val response = ApiServiceManager.apiService.getMyGroups(workerId)
+                if (response.isSuccessful) {
+                    val body = response.body()
+                    myGroupNames.value = body?.data
+                        ?.groups
+                        .orEmpty()
+                        .joinToString(", ") { group ->
+                            group.groupName.ifBlank { group.groupCode }
+                        }
+                } else {
+                    myGroupNames.value = ""
+                }
+            } catch (_: Exception) {
+                myGroupNames.value = ""
+            }
+        }
+    }
+
     LaunchedEffect(workerId) {
         loadAlerts()
         loadPresenceStatus()
+    }
 
-        try {
-            val response = ApiServiceManager.apiService.getMyGroups(workerId)
-            if (response.isSuccessful) {
-                val body = response.body()
-                myGroupNames.value = body?.data
-                    ?.groups
-                    .orEmpty()
-                    .joinToString(", ") { group ->
-                        group.groupName.ifBlank { group.groupCode }
-                    }
-            } else {
-                myGroupNames.value = ""
-            }
-        } catch (_: Exception) {
-            myGroupNames.value = ""
-        }
+    LaunchedEffect(workerId, groupRefreshKey) {
+        loadMyGroups()
     }
 
     DisposableEffect(workerId) {
