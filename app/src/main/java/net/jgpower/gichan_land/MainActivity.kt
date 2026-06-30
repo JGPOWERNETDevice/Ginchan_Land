@@ -28,6 +28,7 @@ class MainActivity : ComponentActivity() {
     private val startAlertId = mutableStateOf<String?>(null)
     private val startWorkerId = mutableStateOf<String?>(null)
     private val startWalkie = mutableStateOf(false)
+    private val startActionReport = mutableStateOf(false)
 
     private var connectivityManager: ConnectivityManager? = null
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -75,9 +76,11 @@ class MainActivity : ComponentActivity() {
                     startAlertId = startAlertId.value,
                     startWorkerId = startWorkerId.value,
                     startWalkie = startWalkie.value,
+                    startActionReport = startActionReport.value,
                     onStartAlertConsumed = {
                         startAlertId.value = null
                         startWorkerId.value = null
+                        startActionReport.value = false
                     },
                     onStartWalkieConsumed = {
                         startWalkie.value = false
@@ -148,6 +151,7 @@ class MainActivity : ComponentActivity() {
     private fun readIntent(intent: Intent?) {
         startAlertId.value = intent?.getStringExtra("alertId")
         startWorkerId.value = intent?.getStringExtra("workerId")
+        startActionReport.value = intent?.getBooleanExtra("openActionReport", false) == true
         if (intent?.getBooleanExtra("openWalkie", false) == true) {
             startWalkie.value = true
         }

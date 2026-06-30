@@ -80,6 +80,7 @@ fun AppNavigation(
     startAlertId: String? = null,
     startWorkerId: String? = null,
     startWalkie: Boolean = false,
+    startActionReport: Boolean = false,
     onStartAlertConsumed: () -> Unit = {},
     onStartWalkieConsumed: () -> Unit = {}
 ) {
@@ -232,7 +233,11 @@ fun AppNavigation(
                 startWalkieReceiver(startWorkerId)
             }
 
-            currentRoute.value = Routes.ALERT_DETAIL
+            currentRoute.value = if (startActionReport) {
+                Routes.ACTION_REPORT
+            } else {
+                Routes.ALERT_DETAIL
+            }
             onStartAlertConsumed()
         }
     }

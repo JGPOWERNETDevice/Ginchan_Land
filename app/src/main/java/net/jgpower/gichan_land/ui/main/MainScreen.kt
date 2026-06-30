@@ -98,17 +98,6 @@ fun MainScreen(
     val knownEventIds = remember { mutableSetOf<String>() }
     val isFirstLoad = remember { mutableStateOf(true) }
 
-    val alertRepository = remember {
-        AlertRepository(ApiServiceManager.apiService)
-    }
-
-    val emergencyRepository = remember {
-        EmergencyRepository(ApiServiceManager.apiService)
-    }
-
-    val eventRepository = remember {
-        EventRepository(ApiServiceManager.apiService)
-    }
 
     val emergencyPresence by EmergencyPresenceState.state.collectAsState()
 
@@ -156,7 +145,7 @@ fun MainScreen(
             errorMessage.value = null
 
             try {
-                val response = alertRepository.getMyAlerts(workerId)
+                val response = AlertRepository(ApiServiceManager.apiService).getMyAlerts(workerId)
 
                 if (response.isSuccessful) {
                     val body: List<WorkerAlert> = response.body() ?: emptyList()
@@ -184,7 +173,7 @@ fun MainScreen(
     fun loadPresenceStatus() {
         coroutineScope.launch {
             try {
-                val response = emergencyRepository.getPresenceStatus()
+                val response = EmergencyRepository(ApiServiceManager.apiService).getPresenceStatus()
                 val data = response.data
 
                 if (response.success && data != null) {
@@ -232,7 +221,7 @@ fun MainScreen(
             errorMessage.value = null
 
             try {
-                val response = eventRepository.createSosEvent(workerId)
+                val response = EventRepository(ApiServiceManager.apiService).createSosEvent(workerId)
 
                 if (response.isSuccessful) {
                     sosMessage.value = "SOS 현장 구조 상황이 보고되었습니다."
@@ -269,16 +258,22 @@ fun MainScreen(
     }
 
     LaunchedEffect(sosMessage.value) {
-        if (sosMessage.value != null) {
+        val currentMessage = sosMessage.value
+        if (currentMessage != null) {
             delay(10_000L)
-            sosMessage.value = null
+            if (sosMessage.value == currentMessage) {
+                sosMessage.value = null
+            }
         }
     }
 
     LaunchedEffect(errorMessage.value) {
-        if (errorMessage.value != null) {
+        val currentMessage = errorMessage.value
+        if (currentMessage != null) {
             delay(10_000L)
-            errorMessage.value = null
+            if (errorMessage.value == currentMessage) {
+                errorMessage.value = null
+            }
         }
     }
 

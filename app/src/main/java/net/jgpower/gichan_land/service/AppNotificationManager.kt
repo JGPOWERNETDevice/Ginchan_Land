@@ -46,8 +46,9 @@ object AppNotificationManager {
             return
         }
 
-        val pendingIntent = createMainPendingIntent(
+        val pendingIntent = createAlertPendingIntent(
             context = context,
+            alert = alert,
             requestCode = alert.alertId.hashCode()
         )
 
@@ -231,6 +232,29 @@ object AppNotificationManager {
 
     fun cancelEmergencyBroadcastNotification(context: Context, broadcastId: String) {
         NotificationManagerCompat.from(context).cancel(("emergency-$broadcastId").hashCode())
+    }
+
+
+    private fun createAlertPendingIntent(
+        context: Context,
+        alert: WorkerAlert,
+        requestCode: Int
+    ): PendingIntent {
+        val intent = Intent(context, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_CLEAR_TOP or
+                    Intent.FLAG_ACTIVITY_SINGLE_TOP or
+                    Intent.FLAG_ACTIVITY_NEW_TASK
+            putExtra("alertId", alert.alertId)
+            putExtra("workerId", alert.receiverId)
+            putExtra("openActionReport", alert.status == "조치 중")
+        }
+
+        return PendingIntent.getActivity(
+            context,
+            requestCode,
+            intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
     }
 
     private fun createMainPendingIntent(
