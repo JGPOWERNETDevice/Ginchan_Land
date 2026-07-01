@@ -1,10 +1,14 @@
 package net.jgpower.gichan_land.ui.main
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -39,6 +43,9 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -98,6 +105,17 @@ fun MainScreen(
     val knownEventIds = remember { mutableSetOf<String>() }
     val isFirstLoad = remember { mutableStateOf(true) }
 
+    val alertRepository = remember {
+        AlertRepository(ApiServiceManager.apiService)
+    }
+
+    val emergencyRepository = remember {
+        EmergencyRepository(ApiServiceManager.apiService)
+    }
+
+    val eventRepository = remember {
+        EventRepository(ApiServiceManager.apiService)
+    }
 
     val emergencyPresence by EmergencyPresenceState.state.collectAsState()
 
@@ -145,7 +163,7 @@ fun MainScreen(
             errorMessage.value = null
 
             try {
-                val response = AlertRepository(ApiServiceManager.apiService).getMyAlerts(workerId)
+                val response = alertRepository.getMyAlerts(workerId)
 
                 if (response.isSuccessful) {
                     val body: List<WorkerAlert> = response.body() ?: emptyList()
@@ -173,7 +191,7 @@ fun MainScreen(
     fun loadPresenceStatus() {
         coroutineScope.launch {
             try {
-                val response = EmergencyRepository(ApiServiceManager.apiService).getPresenceStatus()
+                val response = emergencyRepository.getPresenceStatus()
                 val data = response.data
 
                 if (response.success && data != null) {
@@ -221,7 +239,7 @@ fun MainScreen(
             errorMessage.value = null
 
             try {
-                val response = EventRepository(ApiServiceManager.apiService).createSosEvent(workerId)
+                val response = eventRepository.createSosEvent(workerId)
 
                 if (response.isSuccessful) {
                     sosMessage.value = "SOS 현장 구조 상황이 보고되었습니다."
@@ -258,22 +276,16 @@ fun MainScreen(
     }
 
     LaunchedEffect(sosMessage.value) {
-        val currentMessage = sosMessage.value
-        if (currentMessage != null) {
+        if (sosMessage.value != null) {
             delay(10_000L)
-            if (sosMessage.value == currentMessage) {
-                sosMessage.value = null
-            }
+            sosMessage.value = null
         }
     }
 
     LaunchedEffect(errorMessage.value) {
-        val currentMessage = errorMessage.value
-        if (currentMessage != null) {
+        if (errorMessage.value != null) {
             delay(10_000L)
-            if (errorMessage.value == currentMessage) {
-                errorMessage.value = null
-            }
+            errorMessage.value = null
         }
     }
 
@@ -375,28 +387,44 @@ fun MainScreen(
                 }
             }
 
-            Box {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
                 OutlinedButton(
-                    onClick = {
-                        showMainMenu.value = true
-                    },
+                    onClick = onGroupEditClick,
                     modifier = Modifier
                         .height(36.dp)
-                        .widthIn(min = 72.dp)
+                        .width(42.dp),
+                    contentPadding = PaddingValues(0.dp)
                 ) {
-                    Text(
-                        text = "메뉴",
-                        style = MaterialTheme.typography.labelSmall,
-                        maxLines = 1
+                    QrShortcutIcon(
+                        modifier = Modifier.size(18.dp)
                     )
                 }
 
-                DropdownMenu(
-                    expanded = showMainMenu.value,
-                    onDismissRequest = {
-                        showMainMenu.value = false
+                Box {
+                    OutlinedButton(
+                        onClick = {
+                            showMainMenu.value = true
+                        },
+                        modifier = Modifier
+                            .height(36.dp)
+                            .widthIn(min = 72.dp)
+                    ) {
+                        Text(
+                            text = "메뉴",
+                            style = MaterialTheme.typography.labelSmall,
+                            maxLines = 1
+                        )
                     }
-                ) {
+
+                    DropdownMenu(
+                        expanded = showMainMenu.value,
+                        onDismissRequest = {
+                            showMainMenu.value = false
+                        }
+                    ) {
                     DropdownMenuItem(
                         text = { Text("공지사항") },
                         onClick = {
@@ -413,13 +441,6 @@ fun MainScreen(
                         }
                     )
 
-                    DropdownMenuItem(
-                        text = { Text("그룹 수정") },
-                        onClick = {
-                            showMainMenu.value = false
-                            onGroupEditClick()
-                        }
-                    )
 
                     DropdownMenuItem(
                         text = { Text("로그아웃") },
@@ -439,6 +460,7 @@ fun MainScreen(
                 }
             }
         }
+    }
 
         Spacer(modifier = Modifier.height(20.dp))
 
@@ -609,6 +631,41 @@ private fun AlertListItem(
                 style = MaterialTheme.typography.bodyMedium
             )
         }
+    }
+}
+
+@Composable
+private fun QrShortcutIcon(
+    modifier: Modifier = Modifier
+) {
+    Canvas(modifier = modifier) {
+        val cell = size.minDimension / 7f
+        val color = Color.Black
+
+        fun drawCell(x: Int, y: Int, w: Int = 1, h: Int = 1) {
+            drawRect(
+                color = color,
+                topLeft = Offset(x * cell, y * cell),
+                size = Size(w * cell, h * cell)
+            )
+        }
+
+        fun drawFinder(x: Int, y: Int) {
+            drawCell(x, y, 3, 1)
+            drawCell(x, y + 1, 1, 1)
+            drawCell(x + 2, y + 1, 1, 1)
+            drawCell(x, y + 2, 3, 1)
+        }
+
+        drawFinder(0, 0)
+        drawFinder(4, 0)
+        drawFinder(0, 4)
+
+        drawCell(4, 4)
+        drawCell(6, 4)
+        drawCell(4, 5)
+        drawCell(5, 6)
+        drawCell(6, 6)
     }
 }
 
