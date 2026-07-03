@@ -19,7 +19,7 @@ import java.net.DatagramSocket
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.nio.ByteOrder
-import java.util.ArrayDeque
+import java.util.TreeMap
 import kotlin.concurrent.thread
 import kotlin.math.max
 import net.jgpower.gichan_land.data.walkie.WalkieTarget
@@ -49,28 +49,20 @@ object WalkieTalkieManager {
     private const val TARGET_GROUP = 2
     private const val TARGET_ALL = 3
 
-    private const val SAMPLE_RATE = 16000
+    // Streamlit compatibility profile: 8kHz raw Opus, no redundancy.
+    private const val SAMPLE_RATE = 8000
     private const val FRAME_DURATION_MS = 20
     private const val FRAME_SAMPLES = SAMPLE_RATE * FRAME_DURATION_MS / 1000
     private const val FRAME_BYTES = FRAME_SAMPLES * 2
-    private const val OPUS_BITRATE = 24000
+    private const val OPUS_BITRATE = 16000
 
     private const val MAX_PAYLOAD_BYTES = 1024
 
-    private const val JITTER_BUFFER_START_FRAMES = 6
-    private const val JITTER_BUFFER_TARGET_FRAMES = 7
-    private const val JITTER_BUFFER_MAX_FRAMES = 20
+    private const val JITTER_BUFFER_START_FRAMES = 8
+    private const val JITTER_BUFFER_TARGET_FRAMES = 10
+    private const val JITTER_BUFFER_MAX_FRAMES = 40
+    private const val PLAYBACK_MAX_PLC_FRAMES = 2
     private const val PLAYBACK_IDLE_SLEEP_MS = 1L
-    private const val PLAYBACK_MAX_PLC_FRAMES = 1
-
-    // App-level redundancy. Each UDP packet carries the current Opus frame plus
-    // the last 2 frames. This recovers short UDP broadcast losses without
-    // increasing packet count or relying on long PLC.
-    private const val REDUNDANT_PAYLOAD_MAGIC = 0x52 // 'R'
-    private const val REDUNDANT_HISTORY_FRAMES = 5
-    private const val REDUNDANT_MAX_FRAMES_PER_PACKET = REDUNDANT_HISTORY_FRAMES + 1
-
-    private const val USE_WEBRTC_APM = true
 
     @Volatile
     private var appContext: Context? = null
@@ -109,27 +101,18 @@ object WalkieTalkieManager {
     private var playbackTrack: AudioTrack? = null
 
     @Volatile
-    private var audioProcessor: WebRtcAudioProcessor? = null
-
-    @Volatile
     private var multicastLock: WifiManager.MulticastLock? = null
 
     @Volatile
     private var wifiLock: WifiManager.WifiLock? = null
 
     private val playbackLock = Object()
-    private val playbackQueue = ArrayDeque<ByteArray>()
+    private val playbackBuffer = TreeMap<Int, ByteArray>()
+
+    @Volatile
+    private var activePlaybackSenderId: String? = null
 
     private var sequence = 0
-
-    private data class EncodedAudioFrame(
-        val seq: Int,
-        val opusBytes: ByteArray
-    )
-
-    private val transmitHistory = ArrayDeque<EncodedAudioFrame>()
-
-    private val lastSeqBySender = mutableMapOf<String, Int>()
 
     fun start(
         context: Context,
@@ -155,21 +138,11 @@ object WalkieTalkieManager {
             bitrate = OPUS_BITRATE
         )
 
-        audioProcessor =
-            if (USE_WEBRTC_APM) {
-                WebRtcAudioProcessor(
-                    sampleRate = SAMPLE_RATE,
-                    channels = 1,
-                    frameBytes = FRAME_BYTES
-                )
-            } else {
-                null
-            }
-
         enterCommunicationMode(context)
         acquireWifiPacketLocks(context)
         registerAudioDeviceCallback(context)
         routeCommunicationAudioDevice(context)
+        waitForBluetoothRouteIfNeeded(context)
         initPlaybackTrack()
         startPlaybackLoop()
 
@@ -203,16 +176,9 @@ object WalkieTalkieManager {
         isPlaybackRunning = false
 
         synchronized(playbackLock) {
-            playbackQueue.clear()
+            playbackBuffer.clear()
+            activePlaybackSenderId = null
             playbackLock.notifyAll()
-        }
-
-        synchronized(lastSeqBySender) {
-            lastSeqBySender.clear()
-        }
-
-        synchronized(transmitHistory) {
-            transmitHistory.clear()
         }
 
         try {
@@ -222,12 +188,6 @@ object WalkieTalkieManager {
 
         socket = null
         opusDecoder = null
-
-        try {
-            audioProcessor?.release()
-        } catch (_: Exception) {
-        }
-        audioProcessor = null
 
         synchronized(playbackLock) {
             try {
@@ -263,6 +223,7 @@ object WalkieTalkieManager {
         return isTransmitting
     }
 
+
     fun isStarted(): Boolean {
         return isReceiverRunning && socket != null
     }
@@ -275,7 +236,7 @@ object WalkieTalkieManager {
                 context.applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
 
             if (multicastLock == null) {
-                multicastLock = wifiManager.createMulticastLock("walkie-udp-multicast-lock").apply {
+                multicastLock = wifiManager.createMulticastLock("walkie-streamlit-multicast-lock").apply {
                     setReferenceCounted(false)
                     acquire()
                 }
@@ -285,7 +246,7 @@ object WalkieTalkieManager {
             if (wifiLock == null) {
                 wifiLock = wifiManager.createWifiLock(
                     WifiManager.WIFI_MODE_FULL_HIGH_PERF,
-                    "walkie-udp-high-perf-lock"
+                    "walkie-streamlit-high-perf-lock"
                 ).apply {
                     setReferenceCounted(false)
                     acquire()
@@ -401,19 +362,12 @@ object WalkieTalkieManager {
                     AudioFormat.ENCODING_PCM_16BIT
                 )
 
-                val bluetoothActive = isBluetoothCommunicationActive(context)
-                val audioSource = if (bluetoothActive) {
-                    MediaRecorder.AudioSource.VOICE_RECOGNITION
-                } else {
-                    MediaRecorder.AudioSource.VOICE_COMMUNICATION
-                }
-
                 audioRecord = AudioRecord(
-                    audioSource,
+                    MediaRecorder.AudioSource.VOICE_COMMUNICATION,
                     SAMPLE_RATE,
                     AudioFormat.CHANNEL_IN_MONO,
                     AudioFormat.ENCODING_PCM_16BIT,
-                    max(minBuffer, FRAME_BYTES * 8)
+                    max(minBuffer, FRAME_BYTES * 4)
                 )
 
                 if (audioRecord.state != AudioRecord.STATE_INITIALIZED) {
@@ -422,21 +376,13 @@ object WalkieTalkieManager {
                     return@thread
                 }
 
-                if (!bluetoothActive && AcousticEchoCanceler.isAvailable()) {
+                if (AcousticEchoCanceler.isAvailable()) {
                     echoCanceler = AcousticEchoCanceler.create(audioRecord.audioSessionId)
                     echoCanceler?.enabled = true
                     Log.d(TAG, "AcousticEchoCanceler enabled=${echoCanceler?.enabled}")
                 } else {
-                    Log.d(
-                        TAG,
-                        "AcousticEchoCanceler skipped bluetoothActive=$bluetoothActive available=${AcousticEchoCanceler.isAvailable()}"
-                    )
+                    Log.d(TAG, "AcousticEchoCanceler not available")
                 }
-
-                Log.d(
-                    TAG,
-                    "AudioRecord source=$audioSource bluetoothActive=$bluetoothActive minBuffer=$minBuffer buffer=${max(minBuffer, FRAME_BYTES * 8)}"
-                )
 
                 encoder = OpusCodec(
                     sampleRate = SAMPLE_RATE,
@@ -446,8 +392,6 @@ object WalkieTalkieManager {
                 )
 
                 val pcmFrame = ByteArray(FRAME_BYTES)
-                val processor = audioProcessor
-
                 audioRecord.startRecording()
 
                 Log.d(TAG, "transmit started")
@@ -460,10 +404,6 @@ object WalkieTalkieManager {
 
                     if (!readOk) {
                         continue
-                    }
-
-                    if (!bluetoothActive) {
-                        processor?.processCaptureFrameInPlace(pcmFrame)
                     }
 
                     val opusBytes = encoder.encodePcm(pcmFrame)
@@ -534,27 +474,10 @@ object WalkieTalkieManager {
                 return
             }
 
-            val seq = sequence and 0xffff
-            sequence = (sequence + 1) and 0xffff
-
-            val currentFrame = EncodedAudioFrame(seq, opusBytes.copyOf())
-            val redundantPayload = buildRedundantPayload(currentFrame)
-
-            if (redundantPayload.isEmpty() || redundantPayload.size > MAX_PAYLOAD_BYTES) {
-                Log.d(TAG, "redundant payload too large size=${redundantPayload.size}. send current only")
-            }
-
-            val payload = if (redundantPayload.isNotEmpty() && redundantPayload.size <= MAX_PAYLOAD_BYTES) {
-                redundantPayload
-            } else {
-                opusBytes
-            }
-
             val packetBytes = buildPacket(
                 senderWorkerId = senderWorkerId,
                 target = target,
-                payload = payload,
-                seq = seq
+                payload = opusBytes
             )
 
             val address = broadcastAddress
@@ -568,62 +491,15 @@ object WalkieTalkieManager {
             )
 
             socket.send(packet)
-            rememberTransmittedFrame(currentFrame)
         } catch (e: Exception) {
             Log.e(TAG, "send failed", e)
         }
     }
 
-    private fun rememberTransmittedFrame(frame: EncodedAudioFrame) {
-        synchronized(transmitHistory) {
-            transmitHistory.addLast(frame)
-
-            while (transmitHistory.size > REDUNDANT_HISTORY_FRAMES) {
-                transmitHistory.removeFirst()
-            }
-        }
-    }
-
-    private fun buildRedundantPayload(currentFrame: EncodedAudioFrame): ByteArray {
-        val frames = ArrayList<EncodedAudioFrame>(REDUNDANT_MAX_FRAMES_PER_PACKET)
-
-        synchronized(transmitHistory) {
-            frames.addAll(transmitHistory)
-        }
-
-        frames.add(currentFrame)
-
-        val totalSize = 2 + frames.sumOf { 4 + it.opusBytes.size }
-        if (totalSize > MAX_PAYLOAD_BYTES) {
-            return ByteArray(0)
-        }
-
-        val payload = ByteArray(totalSize)
-        var index = 0
-
-        payload[index++] = REDUNDANT_PAYLOAD_MAGIC.toByte()
-        payload[index++] = frames.size.toByte()
-
-        for (frame in frames) {
-            val length = frame.opusBytes.size
-
-            payload[index++] = (frame.seq and 0xff).toByte()
-            payload[index++] = ((frame.seq shr 8) and 0xff).toByte()
-            payload[index++] = (length and 0xff).toByte()
-            payload[index++] = ((length shr 8) and 0xff).toByte()
-
-            System.arraycopy(frame.opusBytes, 0, payload, index, length)
-            index += length
-        }
-
-        return payload
-    }
-
     private fun buildPacket(
         senderWorkerId: String,
         target: WalkieTarget,
-        payload: ByteArray,
-        seq: Int
+        payload: ByteArray
     ): ByteArray {
         val senderBytes = senderWorkerId.toByteArray(Charsets.UTF_8)
         val targetWorkerBytes =
@@ -660,8 +536,10 @@ object WalkieTalkieManager {
         packet[index++] = CHANNEL_ID.toByte()
         packet[index++] = targetType.toByte()
 
+        val seq = sequence and 0xffff
         packet[index++] = (seq and 0xff).toByte()
         packet[index++] = ((seq shr 8) and 0xff).toByte()
+        sequence = (sequence + 1) and 0xffff
 
         packet[index++] = senderBytes.size.toByte()
         System.arraycopy(senderBytes, 0, packet, index, senderBytes.size)
@@ -761,97 +639,13 @@ object WalkieTalkieManager {
             if (packet.payload.isEmpty()) return
             if (packet.payload.size > MAX_PAYLOAD_BYTES) return
 
-            val frames = parseRedundantPayload(packet.payload)
-                ?: listOf(EncodedAudioFrame(packet.seq, packet.payload))
-
-            for (frame in frames) {
-                if (frame.opusBytes.isEmpty()) continue
-                if (frame.opusBytes.size > MAX_PAYLOAD_BYTES) continue
-                if (shouldDropDuplicateOrOldPacket(packet.senderWorkerId, frame.seq)) continue
-
-                val decodedPcm =
-                    opusDecoder?.decodeToPcm(frame.opusBytes) ?: continue
-
-                if (decodedPcm.isEmpty()) continue
-
-                // Render processing is only an AEC reference. Do not let APM mutate the PCM that is played.
-                if (audioProcessor != null) {
-                    audioProcessor?.processRenderFrame(decodedPcm.copyOf())
-                }
-
-                enqueuePlayback(decodedPcm)
-            }
+            enqueueEncodedPlayback(
+                senderWorkerId = packet.senderWorkerId,
+                seq = packet.seq,
+                opusBytes = packet.payload
+            )
         } catch (e: Exception) {
             Log.e(TAG, "handle packet failed", e)
-        }
-    }
-
-    private fun parseRedundantPayload(payload: ByteArray): List<EncodedAudioFrame>? {
-        if (payload.size < 2) return null
-        if ((payload[0].toInt() and 0xff) != REDUNDANT_PAYLOAD_MAGIC) return null
-
-        val frameCount = payload[1].toInt() and 0xff
-        if (frameCount <= 0 || frameCount > REDUNDANT_MAX_FRAMES_PER_PACKET) return null
-
-        val frames = ArrayList<EncodedAudioFrame>(frameCount)
-        var index = 2
-
-        repeat(frameCount) {
-            if (index + 4 > payload.size) return null
-
-            val seq = (payload[index].toInt() and 0xff) or
-                    ((payload[index + 1].toInt() and 0xff) shl 8)
-            val length = (payload[index + 2].toInt() and 0xff) or
-                    ((payload[index + 3].toInt() and 0xff) shl 8)
-            index += 4
-
-            if (length <= 0 || length > MAX_PAYLOAD_BYTES) return null
-            if (index + length > payload.size) return null
-
-            frames.add(EncodedAudioFrame(seq, payload.copyOfRange(index, index + length)))
-            index += length
-        }
-
-        if (index != payload.size) return null
-
-        return frames
-    }
-
-    private fun shouldDropDuplicateOrOldPacket(
-        senderWorkerId: String,
-        seq: Int
-    ): Boolean {
-        synchronized(lastSeqBySender) {
-            val lastSeq = lastSeqBySender[senderWorkerId]
-
-            if (lastSeq == null) {
-                lastSeqBySender[senderWorkerId] = seq
-                return false
-            }
-
-            val diff = (seq - lastSeq + 65536) and 0xffff
-
-            return when {
-                diff == 0 -> {
-                    true
-                }
-
-                diff < 32768 -> {
-                    if (diff > 1) {
-                        Log.d(
-                            TAG,
-                            "packet gap sender=$senderWorkerId last=$lastSeq seq=$seq lost=${diff - 1}"
-                        )
-                    }
-                    lastSeqBySender[senderWorkerId] = seq
-                    false
-                }
-
-                else -> {
-                    Log.d(TAG, "packet old/reordered sender=$senderWorkerId last=$lastSeq seq=$seq")
-                    true
-                }
-            }
         }
     }
 
@@ -882,7 +676,7 @@ object WalkieTalkieManager {
                             .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
                             .build()
                     )
-                    .setBufferSizeInBytes(max(minBuffer * 2, FRAME_BYTES * 6))
+                    .setBufferSizeInBytes(max(minBuffer * 2, FRAME_BYTES * 8))
                     .setTransferMode(AudioTrack.MODE_STREAM)
                     .build()
 
@@ -891,7 +685,7 @@ object WalkieTalkieManager {
 
                 playbackTrack = track
 
-                Log.d(TAG, "playback track started USAGE_VOICE_COMMUNICATION minBuffer=$minBuffer buffer=${max(minBuffer * 2, FRAME_BYTES * 6)}")
+                Log.d(TAG, "playback track started USAGE_VOICE_COMMUNICATION minBuffer=$minBuffer buffer=${max(minBuffer * 2, FRAME_BYTES * 8)}")
             } catch (e: Exception) {
                 playbackTrack = null
                 Log.e(TAG, "playback track init failed", e)
@@ -899,14 +693,26 @@ object WalkieTalkieManager {
         }
     }
 
-    private fun enqueuePlayback(pcmBytes: ByteArray) {
+    private fun enqueueEncodedPlayback(
+        senderWorkerId: String,
+        seq: Int,
+        opusBytes: ByteArray
+    ) {
         synchronized(playbackLock) {
-            while (playbackQueue.size >= JITTER_BUFFER_MAX_FRAMES) {
-                playbackQueue.removeFirst()
-                Log.d(TAG, "playback queue overflow. drop oldest")
+            if (activePlaybackSenderId != senderWorkerId) {
+                playbackBuffer.clear()
+                activePlaybackSenderId = senderWorkerId
+                Log.d(TAG, "playback sender changed. reset buffer sender=$senderWorkerId")
             }
 
-            playbackQueue.addLast(pcmBytes)
+            playbackBuffer[seq and 0xffff] = opusBytes.copyOf()
+
+            while (playbackBuffer.size > JITTER_BUFFER_MAX_FRAMES) {
+                val droppedSeq = playbackBuffer.firstKey()
+                playbackBuffer.remove(droppedSeq)
+                Log.d(TAG, "playback buffer overflow. drop oldest seq=$droppedSeq")
+            }
+
             playbackLock.notifyAll()
         }
     }
@@ -920,55 +726,83 @@ object WalkieTalkieManager {
             Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_AUDIO)
 
             var bufferPrimed = false
-            var plcFrames = 0
+            var expectedSeq: Int? = null
+            var plcFramesUsed = 0
 
-            Log.d(TAG, "playback loop started")
+            Log.d(TAG, "playback loop started seq-aware jitter buffer")
 
             while (isPlaybackRunning) {
-                val queuedFrame: ByteArray? =
+                val frame: PlaybackFrame? =
                     synchronized(playbackLock) {
                         if (!bufferPrimed) {
-                            if (playbackQueue.size < JITTER_BUFFER_START_FRAMES) {
+                            if (playbackBuffer.size < JITTER_BUFFER_START_FRAMES) {
                                 null
                             } else {
                                 bufferPrimed = true
-                                plcFrames = 0
 
-                                while (playbackQueue.size > JITTER_BUFFER_TARGET_FRAMES) {
-                                    playbackQueue.removeFirst()
+                                while (playbackBuffer.size > JITTER_BUFFER_TARGET_FRAMES) {
+                                    val droppedSeq = playbackBuffer.firstKey()
+                                    playbackBuffer.remove(droppedSeq)
+                                    Log.d(TAG, "playback late while priming. drop old seq=$droppedSeq")
                                 }
 
-                                playbackQueue.removeFirst()
+                                val firstSeq = playbackBuffer.firstKey()
+                                val payload = playbackBuffer.remove(firstSeq)
+                                expectedSeq = (firstSeq + 1) and 0xffff
+                                plcFramesUsed = 0
+                                PlaybackFrame(seq = firstSeq, opusBytes = payload, isPlc = false)
                             }
                         } else {
-                            if (playbackQueue.isEmpty()) {
-                                null
-                            } else {
-                                plcFrames = 0
+                            val expected = expectedSeq
 
-                                while (playbackQueue.size > JITTER_BUFFER_TARGET_FRAMES) {
-                                    playbackQueue.removeFirst()
-                                    Log.d(TAG, "playback late. drop old frame to catch up")
+                            if (expected == null || playbackBuffer.isEmpty()) {
+                                if (playbackBuffer.isEmpty()) {
+                                    Log.d(TAG, "playback underrun. re-prime buffer")
+                                    bufferPrimed = false
+                                    expectedSeq = null
+                                    plcFramesUsed = 0
+                                    null
+                                } else {
+                                    val firstSeq = playbackBuffer.firstKey()
+                                    val payload = playbackBuffer.remove(firstSeq)
+                                    expectedSeq = (firstSeq + 1) and 0xffff
+                                    plcFramesUsed = 0
+                                    PlaybackFrame(seq = firstSeq, opusBytes = payload, isPlc = false)
+                                }
+                            } else {
+                                while (playbackBuffer.isNotEmpty() && isOlderSeq(playbackBuffer.firstKey(), expected)) {
+                                    val droppedSeq = playbackBuffer.firstKey()
+                                    playbackBuffer.remove(droppedSeq)
+                                    Log.d(TAG, "drop old seq=$droppedSeq expected=$expected")
                                 }
 
-                                playbackQueue.removeFirst()
+                                val payload = playbackBuffer.remove(expected)
+
+                                if (payload != null) {
+                                    expectedSeq = (expected + 1) and 0xffff
+                                    plcFramesUsed = 0
+                                    PlaybackFrame(seq = expected, opusBytes = payload, isPlc = false)
+                                } else if (playbackBuffer.isNotEmpty() && plcFramesUsed < PLAYBACK_MAX_PLC_FRAMES) {
+                                    expectedSeq = (expected + 1) and 0xffff
+                                    plcFramesUsed += 1
+                                    Log.d(TAG, "missing seq=$expected. play PLC frame $plcFramesUsed/$PLAYBACK_MAX_PLC_FRAMES")
+                                    PlaybackFrame(seq = expected, opusBytes = null, isPlc = true)
+                                } else if (playbackBuffer.isNotEmpty()) {
+                                    val firstSeq = playbackBuffer.firstKey()
+                                    val payload2 = playbackBuffer.remove(firstSeq)
+                                    Log.d(TAG, "skip missing seq=$expected -> resume seq=$firstSeq")
+                                    expectedSeq = (firstSeq + 1) and 0xffff
+                                    plcFramesUsed = 0
+                                    PlaybackFrame(seq = firstSeq, opusBytes = payload2, isPlc = false)
+                                } else {
+                                    Log.d(TAG, "playback underrun after missing seq. re-prime buffer")
+                                    bufferPrimed = false
+                                    expectedSeq = null
+                                    plcFramesUsed = 0
+                                    null
+                                }
                             }
                         }
-                    }
-
-                val frame =
-                    if (queuedFrame != null) {
-                        queuedFrame
-                    } else if (bufferPrimed && plcFrames < PLAYBACK_MAX_PLC_FRAMES) {
-                        plcFrames += 1
-                        opusDecoder?.decodePlcToPcm()
-                    } else {
-                        if (bufferPrimed) {
-                            Log.d(TAG, "playback underrun. re-prime after plcFrames=$plcFrames")
-                        }
-                        bufferPrimed = false
-                        plcFrames = 0
-                        null
                     }
 
                 if (frame == null) {
@@ -980,11 +814,32 @@ object WalkieTalkieManager {
                     continue
                 }
 
-                playPcm(frame)
+                val decodedPcm = try {
+                    if (frame.isPlc) {
+                        opusDecoder?.decodePlcToPcm()
+                    } else {
+                        val opusBytes = frame.opusBytes ?: continue
+                        opusDecoder?.decodeToPcm(opusBytes)
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "decode failed seq=${frame.seq} plc=${frame.isPlc}", e)
+                    null
+                }
+
+                if (decodedPcm == null || decodedPcm.isEmpty()) {
+                    continue
+                }
+
+                playPcm(decodedPcm)
             }
 
             Log.d(TAG, "playback loop stopped")
         }
+    }
+
+    private fun isOlderSeq(seq: Int, expectedSeq: Int): Boolean {
+        val diff = (seq - expectedSeq + 65536) and 0xffff
+        return diff > 32768
     }
 
     private fun playPcm(pcmBytes: ByteArray) {
@@ -1134,6 +989,7 @@ object WalkieTalkieManager {
             InetAddress.getByName("255.255.255.255")
         }
     }
+
 
     private fun isBluetoothCommunicationActive(context: Context): Boolean {
         return try {
@@ -1316,6 +1172,12 @@ object WalkieTalkieManager {
             Log.e(TAG, "route communication audio device failed", e)
         }
     }
+
+    private data class PlaybackFrame(
+        val seq: Int,
+        val opusBytes: ByteArray?,
+        val isPlc: Boolean
+    )
 
     private data class WalkieAudioPacket(
         val codec: Int,

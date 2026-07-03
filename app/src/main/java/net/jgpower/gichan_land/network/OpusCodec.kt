@@ -67,19 +67,7 @@ class OpusCodec(
             false
         )
 
-        val pcmBytes = ByteArray(decodedSamples * 2)
-
-        var byteIndex = 0
-        for (i in 0 until decodedSamples) {
-            val sample = decodedShorts[i].toInt()
-
-            pcmBytes[byteIndex] = (sample and 0xff).toByte()
-            pcmBytes[byteIndex + 1] = ((sample shr 8) and 0xff).toByte()
-
-            byteIndex += 2
-        }
-
-        return pcmBytes
+        return shortsToLittleEndianPcm(decodedShorts, decodedSamples)
     }
 
     fun decodePlcToPcm(): ByteArray {
@@ -92,9 +80,16 @@ class OpusCodec(
             decodedShorts,
             0,
             frameSamples,
-            false
+            true
         )
 
+        return shortsToLittleEndianPcm(decodedShorts, decodedSamples)
+    }
+
+    private fun shortsToLittleEndianPcm(
+        decodedShorts: ShortArray,
+        decodedSamples: Int
+    ): ByteArray {
         val pcmBytes = ByteArray(decodedSamples * 2)
 
         var byteIndex = 0
@@ -109,5 +104,4 @@ class OpusCodec(
 
         return pcmBytes
     }
-
 }
