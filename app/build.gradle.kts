@@ -18,7 +18,9 @@ android {
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
     ndk {
-        abiFilters += listOf("arm64-v8a")
+        // Keep existing 64-bit support and add 32-bit support for devices
+        // that report only armeabi-v7a/armeabi, such as the Xiaomi M2006C3LG.
+        abiFilters += listOf("armeabi-v7a", "arm64-v8a")
     }
 
     externalNativeBuild {
@@ -58,6 +60,7 @@ android {
         compose = true
     }
 }
+
 
 dependencies {
     implementation(libs.androidx.core.ktx)
