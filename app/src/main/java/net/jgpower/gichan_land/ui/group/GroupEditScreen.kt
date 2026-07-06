@@ -2,6 +2,7 @@ package net.jgpower.gichan_land.ui.group
 
 import android.Manifest
 import android.content.pm.PackageManager
+import android.util.Log
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -167,10 +168,16 @@ fun GroupEditScreen(
             setBeepEnabled(false)
             setOrientationLocked(true)
             setCaptureActivity(PortraitCaptureActivity::class.java)
-            setCameraId(0)
+            // Let ZXing choose the available rear camera. Some Redmi models crash when a fixed
+            // camera id is requested after permission changes or camera service restart.
             setBarcodeImageEnabled(false)
         }
-        qrScannerLauncher.launch(options)
+        try {
+            qrScannerLauncher.launch(options)
+        } catch (e: Exception) {
+            Log.e("GROUP_QR", "QR scanner launch failed", e)
+            statusMessage.value = "QR 스캐너를 실행할 수 없습니다. 앱을 다시 설치하거나 카메라 권한을 확인하세요."
+        }
     }
 
     val cameraPermissionLauncher = rememberLauncherForActivityResult(

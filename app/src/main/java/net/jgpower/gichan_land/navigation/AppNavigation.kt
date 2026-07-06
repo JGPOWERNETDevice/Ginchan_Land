@@ -164,13 +164,11 @@ fun AppNavigation(
     fun stopWebSocketService() {
         Log.d("WS_NAV", "stopWebSocketService")
 
-        val intent = Intent(appContext, WebSocketForegroundService::class.java)
-
         try {
-            appContext.stopService(intent)
-            Log.d("WS_NAV", "stopService called")
+            WebSocketForegroundService.requestStop(appContext)
+            Log.d("WS_NAV", "requestStop called")
         } catch (e: Exception) {
-            Log.e("WS_NAV", "stopService failed", e)
+            Log.e("WS_NAV", "requestStop failed", e)
         }
     }
 
@@ -511,12 +509,15 @@ fun AppNavigation(
     }
 
 
+        // Keep the alert popup host outside the login/route guard.
+        // On Redmi Note8 / Android 10, login state restoration can lag behind activity resume,
+        // so gating this host can make a stored background alert invisible.
+        AppAlertPopupHost()
+
         if (
             loginWorkerId.value.isNotBlank() &&
             currentRoute.value != Routes.SIGN_IN
         ) {
-            AppAlertPopupHost()
-
             WalkieIncomingCallPopupHost(
                 workerId = loginWorkerId.value,
                 enabled = currentRoute.value != Routes.WALKIE_TALKIE,

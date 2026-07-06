@@ -3,6 +3,7 @@ package net.jgpower.gichan_land
 import android.Manifest
 import android.content.Intent
 import android.graphics.Color
+import android.graphics.drawable.ColorDrawable
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
@@ -21,6 +22,10 @@ import net.jgpower.gichan_land.navigation.AppNavigation
 import net.jgpower.gichan_land.network.ApiServiceManager
 import net.jgpower.gichan_land.network.AppWebSocketManager
 import net.jgpower.gichan_land.service.AppNotificationManager
+import net.jgpower.gichan_land.data.alert.PendingAlertStore
+import net.jgpower.gichan_land.data.alert.AppAlertPopupState
+import net.jgpower.gichan_land.data.alert.WorkerAlert
+import net.jgpower.gichan_land.data.textalert.TextAlert
 import net.jgpower.gichan_land.ui.theme.Gichan_LandTheme
 import net.jgpower.gichan_land.watch.TWatchBleNotifier
 
@@ -68,9 +73,10 @@ class MainActivity : ComponentActivity() {
         requestAppPermissionsIfNeeded()
         TWatchBleNotifier.start(applicationContext)
         readIntent(intent)
+        schedulePendingAlertPopupRecovery()
 
         configureSystemBars()
-        keepScreenAwakeForOldXiaomi()
+        restoreForegroundBrightness()
 
         setContent {
             Gichan_LandTheme {
@@ -96,12 +102,24 @@ class MainActivity : ComponentActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         readIntent(intent)
+        schedulePendingAlertPopupRecovery()
     }
 
-    private fun keepScreenAwakeForOldXiaomi() {
-        // Redmi Note 8 / Redmi 9A 계열에서 앱 화면 사용 중 밝기가 빠르게 낮아지는 것을 완화합니다.
-        // 백그라운드에서는 적용되지 않고, 앱 화면이 보이는 동안에만 화면 dim을 막습니다.
-        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+    override fun onStart() {
+        super.onStart()
+        restoreForegroundBrightness()
+    }
+
+    override fun onPostResume() {
+        super.onPostResume()
+        restoreForegroundBrightness()
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus) {
+            restoreForegroundBrightness()
+        }
     }
 
     private fun configureSystemBars() {
@@ -111,6 +129,9 @@ class MainActivity : ComponentActivity() {
         // 기존 앱처럼 시스템 바 영역을 침범하지 않도록 decor fitting을 켜고,
         // 밝은 배경에 맞춰 상태바/내비게이션바 아이콘을 어둡게 고정합니다.
         WindowCompat.setDecorFitsSystemWindows(window, true)
+        window.setBackgroundDrawable(ColorDrawable(Color.WHITE))
+        window.decorView.alpha = 1.0f
+
 
         window.statusBarColor = Color.WHITE
         window.navigationBarColor = Color.WHITE
@@ -118,6 +139,61 @@ class MainActivity : ComponentActivity() {
         val controller = WindowCompat.getInsetsController(window, window.decorView)
         controller.isAppearanceLightStatusBars = true
         controller.isAppearanceLightNavigationBars = true
+    }
+
+    override fun onResume() {
+        super.onResume()
+        schedulePendingAlertPopupRecovery()
+        restoreForegroundBrightness()
+    }
+
+    private fun restoreForegroundBrightness() {
+        try {
+            window.clearFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND)
+            window.clearFlags(WindowManager.LayoutParams.FLAG_SHOW_WALLPAPER)
+            window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+
+            fun applyBrightness() {
+                try {
+                    window.clearFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND)
+                    window.setBackgroundDrawable(ColorDrawable(Color.WHITE))
+                    window.decorView.alpha = 1.0f
+                    val attrs = window.attributes
+                    // Redmi Note8 / MIUI can reopen the app from a lock-screen notification with
+                    // a dimmed window. Force full app-window brightness while the activity is visible.
+                    attrs.screenBrightness = 1.0f
+                    attrs.dimAmount = 0.0f
+                    window.attributes = attrs
+                } catch (_: Exception) {
+                }
+            }
+
+            applyBrightness()
+            mainHandler.postDelayed({ applyBrightness() }, 150L)
+            mainHandler.postDelayed({ applyBrightness() }, 500L)
+            mainHandler.postDelayed({ applyBrightness() }, 1200L)
+        } catch (_: Exception) {
+        }
+    }
+
+    private fun schedulePendingAlertPopupRecovery() {
+        // Redmi Note8 / Android 10 can resume the activity before Compose is ready.
+        // Retry several times and do not delete stored alerts until the user closes the popup.
+        listOf(0L, 250L, 800L, 1600L, 3000L).forEach { delayMs ->
+            mainHandler.postDelayed({ restorePendingAlertPopups() }, delayMs)
+        }
+    }
+
+    private fun restorePendingAlertPopups() {
+        try {
+            PendingAlertStore.peekSafetyAlerts(applicationContext).forEach { alert ->
+                AppAlertPopupState.enqueueSafety(alert)
+            }
+            PendingAlertStore.peekTextAlerts(applicationContext).forEach { alert ->
+                AppAlertPopupState.enqueueText(alert)
+            }
+        } catch (_: Exception) {
+        }
     }
 
     override fun onDestroy() {
@@ -158,10 +234,61 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun readIntent(intent: Intent?) {
-        startAlertId.value = intent?.getStringExtra("alertId")
-        startWorkerId.value = intent?.getStringExtra("workerId")
-        startActionReport.value = intent?.getBooleanExtra("openActionReport", false) == true
-        if (intent?.getBooleanExtra("openWalkie", false) == true) {
+        if (intent == null) {
+            return
+        }
+
+        val openAlertPopup = intent.getBooleanExtra("openAlertPopup", false)
+        val openTextPopup = intent.getBooleanExtra("openTextPopup", false)
+
+        if (openAlertPopup) {
+            val alertId = intent.getStringExtra("alertId").orEmpty()
+            val workerId = intent.getStringExtra("workerId").orEmpty()
+            val message = intent.getStringExtra("alertMessage").orEmpty()
+            if (alertId.isNotBlank()) {
+                AppAlertPopupState.enqueueSafety(
+                    WorkerAlert(
+                        alertId = alertId,
+                        eventId = intent.getStringExtra("alertEventId").orEmpty(),
+                        receiverId = workerId,
+                        receiveType = intent.getStringExtra("alertReceiveType").orEmpty(),
+                        targetType = intent.getStringExtra("alertTargetType").takeIf { !it.isNullOrBlank() },
+                        message = message,
+                        occurredAt = intent.getStringExtra("alertOccurredAt").orEmpty(),
+                        status = intent.getStringExtra("alertStatus").orEmpty()
+                    )
+                )
+            }
+
+            // Open main screen only. Do not navigate directly to detail/action report from
+            // lock-screen notification on Redmi Note8, because MIUI can leave the activity dim/black.
+            startAlertId.value = null
+            startWorkerId.value = workerId
+            startActionReport.value = false
+        } else if (openTextPopup) {
+            val textAlertId = intent.getStringExtra("textAlertId").orEmpty()
+            if (textAlertId.isNotBlank()) {
+                AppAlertPopupState.enqueueText(
+                    TextAlert(
+                        textAlertId = textAlertId,
+                        receiverId = intent.getStringExtra("textReceiverId").orEmpty(),
+                        receiveType = intent.getStringExtra("textReceiveType").orEmpty(),
+                        message = intent.getStringExtra("textAlertMessage").orEmpty(),
+                        createdAt = intent.getStringExtra("textCreatedAt").orEmpty()
+                    )
+                )
+            }
+
+            startAlertId.value = null
+            startWorkerId.value = null
+            startActionReport.value = false
+        } else {
+            startAlertId.value = intent.getStringExtra("alertId")
+            startWorkerId.value = intent.getStringExtra("workerId")
+            startActionReport.value = intent.getBooleanExtra("openActionReport", false)
+        }
+
+        if (intent.getBooleanExtra("openWalkie", false)) {
             startWalkie.value = true
         }
     }
@@ -181,7 +308,6 @@ class MainActivity : ComponentActivity() {
             permissions += Manifest.permission.ACCESS_FINE_LOCATION
         } else {
             permissions += Manifest.permission.ACCESS_FINE_LOCATION
-            permissions += Manifest.permission.ACCESS_COARSE_LOCATION
         }
 
         if (permissions.isNotEmpty()) {

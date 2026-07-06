@@ -3,11 +3,16 @@ package net.jgpower.gichan_land.service
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.app.AlarmManager
 import android.app.PendingIntent
 import android.app.Service
+import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.net.wifi.WifiManager
 import android.os.Build
+import android.os.PowerManager
+import android.os.SystemClock
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
@@ -34,6 +39,10 @@ class WebSocketForegroundService : Service() {
 
     private val mainHandler = Handler(Looper.getMainLooper())
     private var walkieWorkerId: String? = null
+    private var intentionalStop = false
+
+    private var wakeLock: PowerManager.WakeLock? = null
+    private var wifiLock: WifiManager.WifiLock? = null
 
     private val walkiePingRunnable = object : Runnable {
         override fun run() {
@@ -63,6 +72,7 @@ class WebSocketForegroundService : Service() {
                 }
 
                 ensureWalkieReceiverReady(workerId)
+                scheduleKeepAliveAlarm()
             }
 
             mainHandler.postDelayed(this, 5000L)
@@ -85,25 +95,55 @@ class WebSocketForegroundService : Service() {
 
         Log.d("WS_SERVICE", "onStartCommand action=$action workerId=$workerId")
 
+        if (action == ACTION_STOP_SERVICE) {
+            intentionalStop = true
+            clearPersistedWorkerId()
+            releaseKeepAliveLocks()
+            AppWebSocketManager.disconnect()
+            WalkieSignalingClient.disconnect()
+            try {
+                stopForeground(true)
+            } catch (_: Exception) {
+            }
+            stopSelf()
+            return START_NOT_STICKY
+        }
+
         if (action == ACTION_TOGGLE_MIC ||
             action == ACTION_END_CALL ||
             action == ACTION_OPEN_WALKIE ||
             action == ACTION_REFRESH_NOTIFICATION
         ) {
             handleWalkieNotificationAction(action)
+            scheduleKeepAliveAlarm()
             return START_STICKY
         }
 
         if (workerId.isNullOrBlank()) {
+            val savedWorkerId = getPersistedWorkerId()
+            if (!savedWorkerId.isNullOrBlank()) {
+                Log.d("WS_SERVICE", "workerId blank. restart using savedWorkerId=$savedWorkerId")
+                val restartIntent = Intent(this, WebSocketForegroundService::class.java).apply {
+                    putExtra(EXTRA_WORKER_ID, savedWorkerId)
+                }
+                startService(restartIntent)
+                return START_STICKY
+            }
+
             Log.d("WS_SERVICE", "workerId is blank. stopSelf")
             stopSelf()
             return START_NOT_STICKY
         }
 
+        intentionalStop = false
+        persistWorkerId(workerId)
+
         TWatchBleNotifier.start(applicationContext)
 
         try {
             startForegroundWithMicType(createForegroundNotification())
+            acquireKeepAliveLocks()
+            scheduleKeepAliveAlarm()
 
             Log.d("WS_SERVICE", "startForeground success")
         } catch (e: Exception) {
@@ -180,13 +220,20 @@ class WebSocketForegroundService : Service() {
         Log.d("WS_SERVICE", "onDestroy")
         mainHandler.removeCallbacks(walkiePingRunnable)
         mainHandler.removeCallbacks(walkieReconnectRunnable)
+        releaseKeepAliveLocks()
         WalkieSignalingClient.setBackgroundListener(null)
         WalkieSignalingClient.disconnect()
+
+        if (!intentionalStop && !getPersistedWorkerId().isNullOrBlank()) {
+            scheduleKeepAliveAlarm(1500L)
+        }
+
         super.onDestroy()
     }
 
     override fun onTaskRemoved(rootIntent: Intent?) {
-        Log.d("WS_SERVICE", "onTaskRemoved - keep foreground service running")
+        Log.d("WS_SERVICE", "onTaskRemoved - schedule keep alive restart")
+        scheduleKeepAliveAlarm(1000L)
         super.onTaskRemoved(rootIntent)
     }
 
@@ -252,7 +299,20 @@ class WebSocketForegroundService : Service() {
                     )
                     updateForegroundNotification()
 
-                    if (!AppVisibilityState.isForeground.value) {
+                    // Redmi/MIUI can keep AppVisibilityState as foreground after the screen is
+                    // turned off or after the foreground service is restarted. In that state the
+                    // incoming-call state is updated, but the heads-up notification is skipped.
+                    // Streamlit/monitor call requests are usually received while the app is in the
+                    // background, so always post a notification for monitor-side requests and also
+                    // post when the app is not foreground.
+                    val normalizedSender = fromWorkerId.trim().lowercase()
+                    val isMonitorSideRequest = normalizedSender == "monitor" ||
+                            normalizedSender == "streamlit" ||
+                            normalizedSender == "bridge" ||
+                            normalizedSender == "control" ||
+                            normalizedSender == "server"
+
+                    if (!AppVisibilityState.isForeground.value || isMonitorSideRequest) {
                         AppNotificationManager.showWalkieIncomingCallNotification(
                             context = applicationContext,
                             callId = callId,
@@ -616,7 +676,8 @@ class WebSocketForegroundService : Service() {
             .setSmallIcon(R.drawable.ic_launcher_foreground)
             .setOngoing(true)
             .setContentIntent(openPendingIntent)
-            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+            .setOnlyAlertOnce(true)
 
         if (isCallActive && !callId.isNullOrBlank() && !isEmergency) {
             val peer = WalkieGlobalState.activePeerWorkerId.value ?: "상대"
@@ -705,7 +766,7 @@ class WebSocketForegroundService : Service() {
             val channel = NotificationChannel(
                 CHANNEL_ID,
                 CHANNEL_NAME,
-                NotificationManager.IMPORTANCE_LOW
+                NotificationManager.IMPORTANCE_DEFAULT
             ).apply {
                 description = "백그라운드 알림 수신 연결 상태"
             }
@@ -717,6 +778,119 @@ class WebSocketForegroundService : Service() {
         }
     }
 
+
+    private fun acquireKeepAliveLocks() {
+        try {
+            if (wakeLock?.isHeld != true) {
+                val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
+                wakeLock = powerManager.newWakeLock(
+                    PowerManager.PARTIAL_WAKE_LOCK,
+                    "GichanLand:WebSocketKeepAlive"
+                ).apply {
+                    setReferenceCounted(false)
+                    acquire()
+                }
+                Log.d("WS_SERVICE", "partial wake lock acquired")
+            }
+        } catch (e: Exception) {
+            Log.e("WS_SERVICE", "wake lock acquire failed", e)
+        }
+
+        try {
+            if (wifiLock?.isHeld != true) {
+                val wifiManager = applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
+                @Suppress("DEPRECATION")
+                wifiLock = wifiManager.createWifiLock(
+                    WifiManager.WIFI_MODE_FULL_HIGH_PERF,
+                    "GichanLand:WebSocketWifiLock"
+                ).apply {
+                    setReferenceCounted(false)
+                    acquire()
+                }
+                Log.d("WS_SERVICE", "wifi lock acquired")
+            }
+        } catch (e: Exception) {
+            Log.e("WS_SERVICE", "wifi lock acquire failed", e)
+        }
+    }
+
+    private fun releaseKeepAliveLocks() {
+        try {
+            if (wifiLock?.isHeld == true) {
+                wifiLock?.release()
+                Log.d("WS_SERVICE", "wifi lock released")
+            }
+        } catch (e: Exception) {
+            Log.e("WS_SERVICE", "wifi lock release failed", e)
+        }
+        wifiLock = null
+
+        try {
+            if (wakeLock?.isHeld == true) {
+                wakeLock?.release()
+                Log.d("WS_SERVICE", "wake lock released")
+            }
+        } catch (e: Exception) {
+            Log.e("WS_SERVICE", "wake lock release failed", e)
+        }
+        wakeLock = null
+    }
+
+    private fun persistWorkerId(workerId: String) {
+        getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .putString(PREF_WORKER_ID, workerId)
+            .apply()
+    }
+
+    private fun getPersistedWorkerId(): String? {
+        return getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .getString(PREF_WORKER_ID, null)
+            ?.takeIf { it.isNotBlank() }
+    }
+
+    private fun clearPersistedWorkerId() {
+        getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .remove(PREF_WORKER_ID)
+            .apply()
+    }
+
+    private fun scheduleKeepAliveAlarm(delayMs: Long = 30000L) {
+        val workerId = getPersistedWorkerId() ?: return
+
+        try {
+            val alarmManager = getSystemService(Context.ALARM_SERVICE) as AlarmManager
+            val intent = Intent(this, WebSocketKeepAliveReceiver::class.java).apply {
+                action = WebSocketKeepAliveReceiver.ACTION_KEEP_ALIVE
+                putExtra(EXTRA_WORKER_ID, workerId)
+            }
+            val pendingIntent = PendingIntent.getBroadcast(
+                this,
+                4101,
+                intent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+            val triggerAt = SystemClock.elapsedRealtime() + delayMs
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                alarmManager.setAndAllowWhileIdle(
+                    AlarmManager.ELAPSED_REALTIME_WAKEUP,
+                    triggerAt,
+                    pendingIntent
+                )
+            } else {
+                alarmManager.set(
+                    AlarmManager.ELAPSED_REALTIME_WAKEUP,
+                    triggerAt,
+                    pendingIntent
+                )
+            }
+        } catch (e: Exception) {
+            Log.e("WS_SERVICE", "schedule keep alive alarm failed", e)
+        }
+    }
+
     companion object {
         const val EXTRA_WORKER_ID = "workerId"
 
@@ -724,6 +898,25 @@ class WebSocketForegroundService : Service() {
         private const val ACTION_END_CALL = "net.jgpower.gichan_land.action.WALKIE_NOTIFICATION_END_CALL"
         private const val ACTION_OPEN_WALKIE = "net.jgpower.gichan_land.action.WALKIE_NOTIFICATION_OPEN"
         private const val ACTION_REFRESH_NOTIFICATION = "net.jgpower.gichan_land.action.WALKIE_NOTIFICATION_REFRESH"
+        private const val ACTION_STOP_SERVICE = "net.jgpower.gichan_land.action.WS_SERVICE_STOP"
+
+        private const val PREFS_NAME = "gichan_land_ws_service"
+        private const val PREF_WORKER_ID = "workerId"
+
+        fun requestStop(context: android.content.Context) {
+            val intent = Intent(context, WebSocketForegroundService::class.java).apply {
+                action = ACTION_STOP_SERVICE
+            }
+
+            try {
+                androidx.core.content.ContextCompat.startForegroundService(context, intent)
+            } catch (_: Exception) {
+                try {
+                    context.startService(intent)
+                } catch (_: Exception) {
+                }
+            }
+        }
 
         fun refreshWalkieNotification(context: android.content.Context) {
             val intent = Intent(context, WebSocketForegroundService::class.java).apply {
@@ -740,7 +933,7 @@ class WebSocketForegroundService : Service() {
             }
         }
 
-        private const val CHANNEL_ID = "gichan_land_ws_service_channel"
+        private const val CHANNEL_ID = "gichan_land_ws_service_channel_v2"
         private const val CHANNEL_NAME = "기찬랜드 연결 상태"
         private const val NOTIFICATION_ID = 2001
     }

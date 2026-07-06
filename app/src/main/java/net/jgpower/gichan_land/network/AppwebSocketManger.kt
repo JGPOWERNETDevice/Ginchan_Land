@@ -2,10 +2,12 @@ package net.jgpower.gichan_land.network
 
 import android.content.Context
 import android.os.Handler
+import android.os.PowerManager
 import android.os.Looper
 import android.util.Log
 import java.util.concurrent.TimeUnit
 import net.jgpower.gichan_land.data.alert.AppAlertPopupState
+import net.jgpower.gichan_land.data.alert.PendingAlertStore
 import net.jgpower.gichan_land.data.alert.WorkerAlert
 import net.jgpower.gichan_land.data.app.AppVisibilityState
 import net.jgpower.gichan_land.data.emergency.EmergencyPresenceState
@@ -123,10 +125,15 @@ object AppWebSocketManager {
                                         occurredAt = safetyAlert.occurredAt
                                     )
 
-                                    AppAlertPopupState.enqueueSafety(safetyAlert)
+                                    appContext?.let { context ->
+                                        PendingAlertStore.saveSafetyAlert(context, safetyAlert)
+                                    }
+                                    mainHandler.post {
+                                        AppAlertPopupState.enqueueSafety(safetyAlert)
+                                    }
 
-                                    if (!AppVisibilityState.isForeground.value) {
-                                        appContext?.let { context ->
+                                    appContext?.let { context ->
+                                        if (shouldShowBackgroundNotification(context)) {
                                             AppNotificationManager.showAlertNotification(
                                                 context = context,
                                                 alert = safetyAlert
@@ -155,10 +162,15 @@ object AppWebSocketManager {
                                     )
 
                                     TextAlertState.addAlert(textAlert)
-                                    AppAlertPopupState.enqueueText(textAlert)
+                                    appContext?.let { context ->
+                                        PendingAlertStore.saveTextAlert(context, textAlert)
+                                    }
+                                    mainHandler.post {
+                                        AppAlertPopupState.enqueueText(textAlert)
+                                    }
 
-                                    if (!AppVisibilityState.isForeground.value) {
-                                        appContext?.let { context ->
+                                    appContext?.let { context ->
+                                        if (shouldShowBackgroundNotification(context)) {
                                             AppNotificationManager.showTextAlertNotification(
                                                 context = context,
                                                 alert = textAlert
@@ -219,6 +231,24 @@ object AppWebSocketManager {
                 }
             }
         )
+    }
+
+    private fun shouldShowBackgroundNotification(context: Context): Boolean {
+        if (!AppVisibilityState.isForeground.value) {
+            return true
+        }
+
+        // Redmi Note8 / MIUI Android 10 can keep the app lifecycle in foreground state
+        // after Home + screen off, even though the screen is locked/off. In that case
+        // still show the system notification so the alert is not lost.
+        val powerManager = try {
+            context.applicationContext.getSystemService(Context.POWER_SERVICE) as? PowerManager
+        } catch (e: Exception) {
+            Log.e("WS_MANAGER", "power manager check failed", e)
+            null
+        }
+
+        return powerManager?.isInteractive == false
     }
 
     fun reconnectCurrent() {
