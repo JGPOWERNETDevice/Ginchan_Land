@@ -145,25 +145,17 @@ object TWatchBleNotifier {
     fun startScanForSelection(context: Context) {
         init(context)
 
-        if (!hasBlePermission(context)) {
-            updateStatus("BLE 권한이 필요합니다.")
+        val blockReason = getBleScanBlockReason(context)
+        if (blockReason != null) {
+            updateStatus(blockReason)
             return
         }
 
         val adapter = bluetoothAdapter
-        if (adapter == null || !adapter.isEnabled) {
-            updateStatus("Bluetooth가 꺼져 있습니다.")
-            return
-        }
-
-        val scanner = adapter.bluetoothLeScanner
+        val scanner = adapter?.bluetoothLeScanner
         if (scanner == null) {
-            updateStatus("BLE 스캐너를 사용할 수 없습니다.")
+            updateStatus("BLE 스캐너를 사용할 수 없습니다. Bluetooth를 껐다 켠 뒤 다시 시도하세요.")
             return
-        }
-
-        if (!isLocationServiceEnabled(context)) {
-            updateStatus("휴대폰 위치 서비스가 꺼져 있습니다. BLE 목록이 비어 있으면 위치 서비스를 켜세요.")
         }
 
         try {
@@ -177,30 +169,93 @@ object TWatchBleNotifier {
             it.copy(
                 isScanning = true,
                 devices = emptyList(),
-                lastStatus = "BLE 기기 스캔 중..."
+                lastStatus = "BLE 기기 스캔 시작 중..."
             )
         }
 
-        val settings = ScanSettings.Builder()
-            .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
-            .setReportDelay(0L)
-            .setCallbackType(ScanSettings.CALLBACK_TYPE_ALL_MATCHES)
-            .setMatchMode(ScanSettings.MATCH_MODE_AGGRESSIVE)
-            .setNumOfMatches(ScanSettings.MATCH_NUM_MAX_ADVERTISEMENT)
-            .build()
+        val started = startScanCompat(scanner)
+        if (!started) {
+            isScanning = false
+            _uiState.update { it.copy(isScanning = false) }
+            return
+        }
 
-        // Use an unfiltered scan. Some phones do not match scan-response UUIDs in ScanFilter,
-        // while nRF Connect still shows the device. We list every BLE advertisement and then
-        // mark JG_TWATCH / service-UUID matches inside handleScanResult().
-        scanner.startScan(null, settings, scanCallback)
+        _uiState.update {
+            it.copy(
+                isScanning = true,
+                lastStatus = "BLE 기기 스캔 중... 워치가 안 보이면 위치 서비스/MIUI 권한을 확인하세요."
+            )
+        }
 
         mainHandler.postDelayed({
             stopScanOnly()
-        }, 15000L)
+        }, 30000L)
     }
 
     fun stopScanForSelection() {
         stopScanOnly()
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun startScanCompat(scanner: android.bluetooth.le.BluetoothLeScanner): Boolean {
+        var lastError: Exception? = null
+
+        try {
+            val settings = ScanSettings.Builder()
+                .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
+                .setReportDelay(0L)
+                .build()
+            scanner.startScan(null, settings, scanCallback)
+            Log.d(TAG, "BLE scan started with LOW_LATENCY basic settings")
+            return true
+        } catch (e: Exception) {
+            lastError = e
+            Log.e(TAG, "BLE scan start failed with basic settings", e)
+        }
+
+        try {
+            scanner.startScan(scanCallback)
+            Log.d(TAG, "BLE scan started with default settings")
+            return true
+        } catch (e: Exception) {
+            lastError = e
+            Log.e(TAG, "BLE scan start failed with default settings", e)
+        }
+
+        updateStatus(
+            "BLE 스캔 시작 실패: ${lastError?.javaClass?.simpleName ?: "Unknown"}. " +
+                "Bluetooth/위치 서비스를 껐다 켠 뒤, 앱 권한과 MIUI 배터리 제한을 확인하세요."
+        )
+        return false
+    }
+
+    private fun getBleScanBlockReason(context: Context): String? {
+        init(context)
+
+        if (!context.packageManager.hasSystemFeature(PackageManager.FEATURE_BLUETOOTH_LE)) {
+            return "이 기기는 BLE를 지원하지 않습니다."
+        }
+
+        val adapter = bluetoothAdapter
+            ?: return "Bluetooth 어댑터를 사용할 수 없습니다."
+
+        if (!adapter.isEnabled) {
+            return "Bluetooth가 꺼져 있습니다. Bluetooth를 켠 뒤 다시 시도하세요."
+        }
+
+        if (!hasBlePermission(context)) {
+            return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                "BLE 권한이 필요합니다. 근처 기기, Bluetooth, 위치 권한을 허용하세요."
+            } else {
+                "Android 10/11 BLE 스캔에는 위치 권한이 필요합니다. 앱 권한에서 위치를 허용하세요."
+            }
+        }
+
+        if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.R && !isLocationServiceEnabled(context)) {
+            return "Android 10/11 BLE 스캔에는 휴대폰 위치 서비스가 켜져 있어야 합니다. 상단바 위치 아이콘을 켠 뒤 다시 스캔하세요."
+        }
+
+        return null
     }
 
     fun connectToScannedDevice(context: Context, address: String, name: String) {
@@ -568,8 +623,13 @@ object TWatchBleNotifier {
             ContextCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_SCAN) == PackageManager.PERMISSION_GRANTED &&
                 ContextCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED &&
                 ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
-        } else {
+        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            // Android 10/11 BLE scan requires runtime location permission. Fine location is the safest
+            // option on MIUI; coarse-only can still return an empty scan list on some Redmi builds.
             ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
+        } else {
+            ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED ||
+                ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
         }
     }
 

@@ -51,12 +51,16 @@ fun TWatchConnectScreen(
             Manifest.permission.ACCESS_FINE_LOCATION
         )
     } else {
-        arrayOf(Manifest.permission.ACCESS_FINE_LOCATION)
+        arrayOf(
+            Manifest.permission.ACCESS_FINE_LOCATION,
+            Manifest.permission.ACCESS_COARSE_LOCATION
+        )
     }
 
     val permissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) {
+        // Even when a permission is denied, startScanForSelection() will display the exact reason.
         TWatchBleNotifier.startScanForSelection(context.applicationContext)
     }
 
@@ -88,7 +92,7 @@ fun TWatchConnectScreen(
         )
 
         Text(
-            text = "스캔이 비어 있으면 휴대폰 Bluetooth와 위치 서비스를 켜고, 앱 권한에서 근처 기기/위치를 허용하세요.",
+            text = "Redmi/MIUI Android 10/11은 BLE 스캔에 위치 권한과 휴대폰 위치 서비스 ON이 필요합니다. 스캔이 비어 있으면 앱 정보 > 권한 > 위치 허용, 배터리 절약 > 제한 없음도 확인하세요.",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )

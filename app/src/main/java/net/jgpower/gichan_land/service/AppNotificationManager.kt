@@ -4,6 +4,7 @@ import android.Manifest
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
+import android.graphics.Color
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -18,8 +19,9 @@ import net.jgpower.gichan_land.data.textalert.TextAlert
 
 object AppNotificationManager {
 
-    private const val CHANNEL_ID = "gichan_land_alert_channel"
-    private const val CHANNEL_NAME = "기찬랜드 알림"
+    private const val CHANNEL_ID = "gichan_land_alert_channel_v2"
+    private const val CHANNEL_NAME = "기찬랜드 중요 알림"
+    private val ALERT_VIBRATE_PATTERN = longArrayOf(0L, 700L, 250L, 700L)
 
     fun createChannel(context: Context) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -29,11 +31,26 @@ object AppNotificationManager {
                 NotificationManager.IMPORTANCE_HIGH
             ).apply {
                 description = "위험 알림 및 중앙 관제 알림"
+                enableVibration(true)
+                vibrationPattern = ALERT_VIBRATE_PATTERN
+                enableLights(true)
+                lightColor = Color.RED
+                lockscreenVisibility = android.app.Notification.VISIBILITY_PUBLIC
             }
 
             val manager = context.getSystemService(NotificationManager::class.java)
             manager.createNotificationChannel(channel)
         }
+    }
+
+
+    private fun applyHeadsUpDefaults(builder: NotificationCompat.Builder): NotificationCompat.Builder {
+        return builder
+            .setPriority(NotificationCompat.PRIORITY_MAX)
+            .setDefaults(NotificationCompat.DEFAULT_ALL)
+            .setVibrate(ALERT_VIBRATE_PATTERN)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            .setOnlyAlertOnce(false)
     }
 
     fun showAlertNotification(
@@ -52,15 +69,16 @@ object AppNotificationManager {
             requestCode = alert.alertId.hashCode()
         )
 
-        val notification = NotificationCompat.Builder(context, CHANNEL_ID)
-            .setSmallIcon(R.drawable.ic_launcher_foreground)
-            .setContentTitle("위험 알림 발생")
-            .setContentText(alert.message)
-            .setStyle(NotificationCompat.BigTextStyle().bigText(alert.message))
-            .setContentIntent(pendingIntent)
-            .setAutoCancel(true)
-            .setPriority(NotificationCompat.PRIORITY_HIGH)
-            .build()
+        val notification = applyHeadsUpDefaults(
+            NotificationCompat.Builder(context, CHANNEL_ID)
+                .setSmallIcon(R.drawable.ic_launcher_foreground)
+                .setContentTitle("위험 알림 발생")
+                .setContentText(alert.message)
+                .setStyle(NotificationCompat.BigTextStyle().bigText(alert.message))
+                .setContentIntent(pendingIntent)
+                .setAutoCancel(true)
+                .setCategory(NotificationCompat.CATEGORY_ALARM)
+        ).build()
 
         NotificationManagerCompat.from(context).notify(
             alert.alertId.hashCode(),
@@ -83,15 +101,16 @@ object AppNotificationManager {
             requestCode = alert.textAlertId.hashCode()
         )
 
-        val notification = NotificationCompat.Builder(context, CHANNEL_ID)
-            .setSmallIcon(R.drawable.ic_launcher_foreground)
-            .setContentTitle("중앙 관제 알림")
-            .setContentText(alert.message)
-            .setStyle(NotificationCompat.BigTextStyle().bigText(alert.message))
-            .setContentIntent(pendingIntent)
-            .setAutoCancel(true)
-            .setPriority(NotificationCompat.PRIORITY_HIGH)
-            .build()
+        val notification = applyHeadsUpDefaults(
+            NotificationCompat.Builder(context, CHANNEL_ID)
+                .setSmallIcon(R.drawable.ic_launcher_foreground)
+                .setContentTitle("중앙 관제 알림")
+                .setContentText(alert.message)
+                .setStyle(NotificationCompat.BigTextStyle().bigText(alert.message))
+                .setContentIntent(pendingIntent)
+                .setAutoCancel(true)
+                .setCategory(NotificationCompat.CATEGORY_ALARM)
+        ).build()
 
         NotificationManagerCompat.from(context).notify(
             alert.textAlertId.hashCode(),
@@ -163,18 +182,18 @@ object AppNotificationManager {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
-        val notification = NotificationCompat.Builder(context, CHANNEL_ID)
-            .setSmallIcon(R.drawable.ic_launcher_foreground)
-            .setContentTitle(title)
-            .setContentText(message)
-            .setStyle(NotificationCompat.BigTextStyle().bigText(message))
-            .setContentIntent(openPendingIntent)
-            .setAutoCancel(true)
-            .setCategory(NotificationCompat.CATEGORY_CALL)
-            .setPriority(NotificationCompat.PRIORITY_HIGH)
-            .addAction(0, "수신", acceptPendingIntent)
-            .addAction(0, "거절", rejectPendingIntent)
-            .build()
+        val notification = applyHeadsUpDefaults(
+            NotificationCompat.Builder(context, CHANNEL_ID)
+                .setSmallIcon(R.drawable.ic_launcher_foreground)
+                .setContentTitle(title)
+                .setContentText(message)
+                .setStyle(NotificationCompat.BigTextStyle().bigText(message))
+                .setContentIntent(openPendingIntent)
+                .setAutoCancel(true)
+                .setCategory(NotificationCompat.CATEGORY_CALL)
+                .addAction(0, "수신", acceptPendingIntent)
+                .addAction(0, "거절", rejectPendingIntent)
+        ).build()
 
         NotificationManagerCompat.from(context).notify(
             callId.hashCode(),
@@ -213,16 +232,16 @@ object AppNotificationManager {
             requestCode = ("emergency-$broadcastId").hashCode()
         )
 
-        val notification = NotificationCompat.Builder(context, CHANNEL_ID)
-            .setSmallIcon(R.drawable.ic_launcher_foreground)
-            .setContentTitle(title)
-            .setContentText(message)
-            .setStyle(NotificationCompat.BigTextStyle().bigText(message))
-            .setContentIntent(openPendingIntent)
-            .setAutoCancel(true)
-            .setCategory(NotificationCompat.CATEGORY_ALARM)
-            .setPriority(NotificationCompat.PRIORITY_HIGH)
-            .build()
+        val notification = applyHeadsUpDefaults(
+            NotificationCompat.Builder(context, CHANNEL_ID)
+                .setSmallIcon(R.drawable.ic_launcher_foreground)
+                .setContentTitle(title)
+                .setContentText(message)
+                .setStyle(NotificationCompat.BigTextStyle().bigText(message))
+                .setContentIntent(openPendingIntent)
+                .setAutoCancel(true)
+                .setCategory(NotificationCompat.CATEGORY_ALARM)
+        ).build()
 
         NotificationManagerCompat.from(context).notify(
             ("emergency-$broadcastId").hashCode(),

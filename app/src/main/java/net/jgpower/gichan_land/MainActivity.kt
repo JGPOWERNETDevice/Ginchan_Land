@@ -11,6 +11,7 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -69,6 +70,7 @@ class MainActivity : ComponentActivity() {
         readIntent(intent)
 
         configureSystemBars()
+        keepScreenAwakeForOldXiaomi()
 
         setContent {
             Gichan_LandTheme {
@@ -92,7 +94,14 @@ class MainActivity : ComponentActivity() {
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
+        setIntent(intent)
         readIntent(intent)
+    }
+
+    private fun keepScreenAwakeForOldXiaomi() {
+        // Redmi Note 8 / Redmi 9A 계열에서 앱 화면 사용 중 밝기가 빠르게 낮아지는 것을 완화합니다.
+        // 백그라운드에서는 적용되지 않고, 앱 화면이 보이는 동안에만 화면 dim을 막습니다.
+        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
     }
 
     private fun configureSystemBars() {
@@ -172,6 +181,7 @@ class MainActivity : ComponentActivity() {
             permissions += Manifest.permission.ACCESS_FINE_LOCATION
         } else {
             permissions += Manifest.permission.ACCESS_FINE_LOCATION
+            permissions += Manifest.permission.ACCESS_COARSE_LOCATION
         }
 
         if (permissions.isNotEmpty()) {
