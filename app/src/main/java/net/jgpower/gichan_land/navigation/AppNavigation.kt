@@ -509,15 +509,14 @@ fun AppNavigation(
     }
 
 
-        // Keep the alert popup host outside the login/route guard.
-        // On Redmi Note8 / Android 10, login state restoration can lag behind activity resume,
-        // so gating this host can make a stored background alert invisible.
-        AppAlertPopupHost()
-
         if (
             loginWorkerId.value.isNotBlank() &&
             currentRoute.value != Routes.SIGN_IN
         ) {
+            // 메인 화면 내부 알림 팝업은 사용하지 않음.
+            // 백그라운드/잠금화면 알림은 시스템 상단 알림(AppNotificationManager)만 사용한다.
+            // AppAlertPopupHost()
+
             WalkieIncomingCallPopupHost(
                 workerId = loginWorkerId.value,
                 enabled = currentRoute.value != Routes.WALKIE_TALKIE,

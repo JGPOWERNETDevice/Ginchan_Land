@@ -75,11 +75,11 @@ object WalkieTalkieManager {
     private const val APP_PLAYBACK_MAX_PLC_FRAMES = 1
 
     // Streamlit bridge packets are 8 kHz raw Opus with no redundancy.
-    // Give this path a deeper local playback buffer and short PLC so bridge/app jitter does not
-    // become audible cuts. Streamlit server code and payload format remain unchanged.
-    private const val STREAMLIT_JITTER_BUFFER_START_FRAMES = 8
-    private const val STREAMLIT_JITTER_BUFFER_MAX_FRAMES = 80
-    private const val STREAMLIT_PLAYBACK_MAX_PLC_FRAMES = 8
+    // Keep this path shallow for field voice calls. The bridge may still deliver frames
+    // with jitter, but a deep app buffer makes Bluetooth playback delay much worse.
+    private const val STREAMLIT_JITTER_BUFFER_START_FRAMES = 3
+    private const val STREAMLIT_JITTER_BUFFER_MAX_FRAMES = 15
+    private const val STREAMLIT_PLAYBACK_MAX_PLC_FRAMES = 2
 
     private const val PLAYBACK_IDLE_SLEEP_MS = 1L
 
@@ -142,6 +142,11 @@ object WalkieTalkieManager {
     private var playbackTrack: AudioTrack? = null
 
     @Volatile
+    private var suppressPlaybackUntilMs: Long = 0L
+
+    private val audioRouteHandler = Handler(Looper.getMainLooper())
+
+    @Volatile
     private var playbackTrackSampleRate: Int = 0
 
     @Volatile
@@ -189,6 +194,38 @@ object WalkieTalkieManager {
 
     private val transmitHistory = ArrayDeque<EncodedAudioFrame>()
     private val lastSeqBySender = mutableMapOf<String, Int>()
+
+    // Temporary audio diagnostics for Galaxy USB debugging.
+    // Search Logcat with: WALKIE_AUDIO_DIAG
+    private const val AUDIO_DIAG_TAG = "WALKIE_AUDIO_DIAG"
+    private const val AUDIO_DIAG_INTERVAL_MS = 1000L
+
+    @Volatile
+    private var streamlitRxLastLogAtMs = 0L
+
+    @Volatile
+    private var streamlitRxLastFrameAtMs = 0L
+
+    @Volatile
+    private var streamlitRxFrameCount = 0
+
+    @Volatile
+    private var streamlitRxBadPcmCount = 0
+
+    @Volatile
+    private var streamlitRxLargePayloadCount = 0
+
+    @Volatile
+    private var streamlitRxPayloadBytes = 0L
+
+    @Volatile
+    private var txLastLogAtMs = 0L
+
+    @Volatile
+    private var txFrameCount = 0
+
+    @Volatile
+    private var txPayloadBytes = 0L
 
     fun start(
         context: Context,
@@ -250,6 +287,7 @@ object WalkieTalkieManager {
             TAG,
             "started workerId=$workerId areaGroup=$areaGroup streamlit=8k/raw app1to1=16k/redundancy5"
         )
+        logAudioRouteSnapshot(context, "start")
     }
 
     fun stop() {
@@ -411,12 +449,11 @@ object WalkieTalkieManager {
             audioManager.isSpeakerphoneOn = false
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                 audioManager.clearCommunicationDevice()
-            } else {
-                audioManager.stopBluetoothSco()
-                audioManager.isBluetoothScoOn = false
             }
+            audioManager.stopBluetoothSco()
+            audioManager.isBluetoothScoOn = false
 
-            Log.d(TAG, "audio mode restored MODE_NORMAL speakerOn=false")
+            Log.d(TAG, "audio mode restored MODE_NORMAL speakerOn=false SCO forced off")
         } catch (e: Exception) {
             Log.e(TAG, "exit communication mode failed", e)
         }
@@ -425,23 +462,112 @@ object WalkieTalkieManager {
 
     @Suppress("DEPRECATION")
     private fun restoreReceivePlaybackMode(context: Context) {
+        val appCtx = context.applicationContext
+
+        // BT SCO route changes are asynchronous. After MIC OFF, Galaxy/YYK-520 can report
+        // SCO audio state 0 while AudioManager still exposes BT_SCO as the communication device.
+        // Clear the route now and retry after the platform has had time to settle. During that
+        // short window, avoid playing stale Streamlit frames into the narrow call route.
+        suppressPlaybackUntilMs = SystemClock.elapsedRealtime() + 900L
+        clearPlaybackQueue("restoreReceivePlaybackMode")
+        releasePlaybackTrack("restoreReceivePlaybackMode")
+
+        forceScoOffForReceive(appCtx, "restoreReceivePlaybackMode-afterScoOff-0ms")
+
+        audioRouteHandler.postDelayed({
+            forceScoOffForReceive(appCtx, "restoreReceivePlaybackMode-afterScoOff-300ms")
+        }, 300L)
+
+        audioRouteHandler.postDelayed({
+            forceScoOffForReceive(appCtx, "restoreReceivePlaybackMode-afterScoOff-800ms")
+            suppressPlaybackUntilMs = 0L
+        }, 800L)
+    }
+
+    @Suppress("DEPRECATION")
+    private fun forceScoOffForReceive(context: Context, label: String) {
+        if (isTransmitting) {
+            Log.d(AUDIO_DIAG_TAG, "skipScoOffReceive label=$label reason=transmitting")
+            return
+        }
+
         try {
             val audioManager =
                 context.applicationContext.getSystemService(Context.AUDIO_SERVICE) as AudioManager
 
-            audioManager.mode = AudioManager.MODE_NORMAL
             audioManager.isSpeakerphoneOn = false
 
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                 audioManager.clearCommunicationDevice()
-            } else {
-                audioManager.stopBluetoothSco()
-                audioManager.isBluetoothScoOn = false
             }
 
-            Log.d(TAG, "receive playback mode restored MODE_NORMAL media route")
+            audioManager.stopBluetoothSco()
+            audioManager.isBluetoothScoOn = false
+            audioManager.mode = AudioManager.MODE_NORMAL
+            audioManager.isSpeakerphoneOn = false
+
+            val btMediaAvailable = isBluetoothMediaOutputAvailable(context)
+            Log.d(
+                AUDIO_DIAG_TAG,
+                "receiveOutputPolicy label=$label preferEarbud=true speakerFallback=false btMediaAvailable=$btMediaAvailable"
+            )
+            Log.d(TAG, "receive playback mode restored MODE_NORMAL media route, SCO forced off label=$label")
+            logAudioRouteSnapshot(context, label)
         } catch (e: Exception) {
-            Log.e(TAG, "restore receive playback mode failed", e)
+            Log.e(TAG, "force SCO off for receive failed label=$label", e)
+        }
+    }
+
+
+    private fun isBluetoothMediaOutputAvailable(context: Context): Boolean {
+        return try {
+            val audioManager =
+                context.applicationContext.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+            audioManager.getDevices(AudioManager.GET_DEVICES_OUTPUTS).any { device ->
+                device.type == AudioDeviceInfo.TYPE_BLUETOOTH_A2DP ||
+                        device.type == AudioDeviceInfo.TYPE_BLE_HEADSET ||
+                        device.type == AudioDeviceInfo.TYPE_BLE_SPEAKER ||
+                        device.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO
+            }
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    private fun clearPlaybackQueue(reason: String) {
+        synchronized(playbackLock) {
+            val dropped = playbackQueue.size
+            playbackQueue.clear()
+            playbackLock.notifyAll()
+            Log.d(AUDIO_DIAG_TAG, "playbackQueueClear reason=$reason dropped=$dropped")
+        }
+    }
+
+    private fun releasePlaybackTrack(reason: String) {
+        synchronized(playbackLock) {
+            try {
+                playbackTrack?.pause()
+            } catch (_: Exception) {
+            }
+
+            try {
+                playbackTrack?.flush()
+            } catch (_: Exception) {
+            }
+
+            try {
+                playbackTrack?.stop()
+            } catch (_: Exception) {
+            }
+
+            try {
+                playbackTrack?.release()
+            } catch (_: Exception) {
+            }
+
+            playbackTrack = null
+            playbackTrackSampleRate = 0
+            Log.d(AUDIO_DIAG_TAG, "playbackTrackRelease reason=$reason")
         }
     }
 
@@ -479,6 +605,7 @@ object WalkieTalkieManager {
             return true
         }
 
+        suppressPlaybackUntilMs = 0L
         isTransmitting = true
 
         thread(name = "walkie-transmit") {
@@ -565,6 +692,7 @@ object WalkieTalkieManager {
                     TAG,
                     "transmit started requestedProfile=$requestedProfile effectiveProfile=$profile sampleRate=${profile.sampleRate} frameBytes=${profile.frameBytes} bluetoothActive=$bluetoothActive legacySco=$legacyBluetoothScoActive source=$audioSource"
                 )
+                logAudioRouteSnapshot(context, "transmitStarted")
 
                 while (isTransmitting) {
                     val readOk = readFullFrame(
@@ -582,6 +710,14 @@ object WalkieTalkieManager {
                     }
 
                     val opusBytes = encoder.encodePcm(pcmFrame)
+
+                    maybeLogTransmitFrame(
+                        profile = profile,
+                        pcmBytes = pcmFrame,
+                        opusBytes = opusBytes,
+                        bluetoothActive = bluetoothActive,
+                        audioSource = audioSource
+                    )
 
                     sendAudioPacket(
                         socket = udpSocket,
@@ -935,6 +1071,8 @@ object WalkieTalkieManager {
                 } ?: return
                 if (decodedPcm.isEmpty()) return
 
+                maybeLogStreamlitRxFrame(packet, decodedPcm)
+
                 enqueuePlayback(PcmFrame(STREAMLIT_SAMPLE_RATE, decodedPcm))
             }
         } catch (e: Exception) {
@@ -1047,6 +1185,7 @@ object WalkieTalkieManager {
                     )
                     .setBufferSizeInBytes(playbackBufferSizeBytes(sampleRate, minBuffer))
                     .setTransferMode(AudioTrack.MODE_STREAM)
+                    .setPerformanceMode(AudioTrack.PERFORMANCE_MODE_LOW_LATENCY)
                     .build()
 
                 track.setVolume(AudioTrack.getMaxVolume())
@@ -1056,6 +1195,7 @@ object WalkieTalkieManager {
                 playbackTrackSampleRate = sampleRate
 
                 Log.d(TAG, "playback track started MEDIA sampleRate=$sampleRate buffer=${playbackBufferSizeBytes(sampleRate, minBuffer)}")
+                appContext?.let { logAudioRouteSnapshot(it, "playbackTrackStarted-$sampleRate") }
             } catch (e: Exception) {
                 playbackTrack = null
                 playbackTrackSampleRate = 0
@@ -1066,7 +1206,9 @@ object WalkieTalkieManager {
 
     private fun playbackBufferSizeBytes(sampleRate: Int, minBuffer: Int): Int {
         val frameBytes = if (sampleRate == APP_SAMPLE_RATE) APP_FRAME_BYTES else STREAMLIT_FRAME_BYTES
-        val multiplier = if (sampleRate == STREAMLIT_SAMPLE_RATE) 30 else 12
+        // 8 frames = about 160 ms for both 8 kHz and 16 kHz 20 ms frames.
+        // The previous Streamlit value was about 600 ms and amplified delayed BT playback.
+        val multiplier = 8
         return max(minBuffer, frameBytes * multiplier)
     }
 
@@ -1095,16 +1237,136 @@ object WalkieTalkieManager {
     }
 
     private fun enqueuePlayback(frame: PcmFrame) {
+        val suppressUntil = suppressPlaybackUntilMs
+        if (suppressUntil > 0L && SystemClock.elapsedRealtime() < suppressUntil) {
+            Log.d(AUDIO_DIAG_TAG, "playbackSuppressed sampleRate=${frame.sampleRate} remainingMs=${suppressUntil - SystemClock.elapsedRealtime()}")
+            return
+        }
+
         synchronized(playbackLock) {
             val maxFrames = jitterMaxFramesFor(frame.sampleRate)
             while (playbackQueue.size >= maxFrames) {
                 playbackQueue.removeFirst()
                 Log.d(TAG, "playback queue overflow. drop oldest sampleRate=${frame.sampleRate}")
+                Log.d(AUDIO_DIAG_TAG, "queueOverflow sampleRate=${frame.sampleRate} maxFrames=$maxFrames")
             }
 
             playbackQueue.addLast(frame)
             playbackLock.notifyAll()
         }
+    }
+
+    private fun maybeLogStreamlitRxFrame(
+        packet: WalkieAudioPacket,
+        decodedPcm: ByteArray
+    ) {
+        val now = SystemClock.elapsedRealtime()
+        val dtMs = if (streamlitRxLastFrameAtMs == 0L) -1L else now - streamlitRxLastFrameAtMs
+        streamlitRxLastFrameAtMs = now
+
+        streamlitRxFrameCount += 1
+        streamlitRxPayloadBytes += packet.payload.size.toLong()
+
+        if (decodedPcm.size != STREAMLIT_FRAME_BYTES) {
+            streamlitRxBadPcmCount += 1
+        }
+
+        if (packet.payload.size > 200) {
+            streamlitRxLargePayloadCount += 1
+        }
+
+        val shouldLogNow =
+            streamlitRxLastLogAtMs == 0L || now - streamlitRxLastLogAtMs >= AUDIO_DIAG_INTERVAL_MS
+
+        if (!shouldLogNow) return
+
+        val queueSize = synchronized(playbackLock) { playbackQueue.size }
+        val avgPayload = if (streamlitRxFrameCount > 0) {
+            streamlitRxPayloadBytes / streamlitRxFrameCount
+        } else {
+            0L
+        }
+
+        Log.d(
+            AUDIO_DIAG_TAG,
+            "streamlitRx sender=${packet.senderWorkerId} seq=${packet.seq} " +
+                    "payloadLen=${packet.payload.size} avgPayload=$avgPayload head=${packet.payload.headHex(12)} " +
+                    "pcmLen=${decodedPcm.size} expectedPcm=$STREAMLIT_FRAME_BYTES dtMs=$dtMs " +
+                    "frames=$streamlitRxFrameCount badPcm=$streamlitRxBadPcmCount largePayload=$streamlitRxLargePayloadCount " +
+                    "queue=$queueSize jitterStart=$STREAMLIT_JITTER_BUFFER_START_FRAMES jitterMax=$STREAMLIT_JITTER_BUFFER_MAX_FRAMES"
+        )
+
+        if (packet.payload.startsWithBytes(byteArrayOf(0x1a.toByte(), 0x45.toByte(), 0xdf.toByte(), 0xa3.toByte()))) {
+            Log.w(AUDIO_DIAG_TAG, "streamlitRx BAD_FORMAT WebM/MediaRecorder header detected")
+        }
+
+        if (packet.payload.startsWithBytes(byteArrayOf(0x4f.toByte(), 0x67.toByte(), 0x67.toByte(), 0x53.toByte()))) {
+            Log.w(AUDIO_DIAG_TAG, "streamlitRx BAD_FORMAT Ogg/Opus header detected")
+        }
+
+        if (packet.payload.size > 200) {
+            Log.w(AUDIO_DIAG_TAG, "streamlitRx WARN payload too large for normal 20ms raw Opus payloadLen=${packet.payload.size}")
+        }
+
+        if (decodedPcm.size != STREAMLIT_FRAME_BYTES) {
+            Log.w(AUDIO_DIAG_TAG, "streamlitRx WARN decoded PCM size mismatch pcmLen=${decodedPcm.size} expected=$STREAMLIT_FRAME_BYTES")
+        }
+
+        streamlitRxLastLogAtMs = now
+        streamlitRxFrameCount = 0
+        streamlitRxBadPcmCount = 0
+        streamlitRxLargePayloadCount = 0
+        streamlitRxPayloadBytes = 0L
+    }
+
+    private fun maybeLogTransmitFrame(
+        profile: AudioProfile,
+        pcmBytes: ByteArray,
+        opusBytes: ByteArray,
+        bluetoothActive: Boolean,
+        audioSource: Int
+    ) {
+        val now = SystemClock.elapsedRealtime()
+        txFrameCount += 1
+        txPayloadBytes += opusBytes.size.toLong()
+
+        if (txLastLogAtMs != 0L && now - txLastLogAtMs < AUDIO_DIAG_INTERVAL_MS) return
+
+        val avgPayload = if (txFrameCount > 0) txPayloadBytes / txFrameCount else 0L
+        val level = pcmLevelSummary(pcmBytes)
+
+        Log.d(
+            AUDIO_DIAG_TAG,
+            "tx profile=$profile sampleRate=${profile.sampleRate} pcmLen=${pcmBytes.size} " +
+                    "opusLen=${opusBytes.size} avgOpus=$avgPayload frames=$txFrameCount " +
+                    "bluetoothActive=$bluetoothActive source=$audioSource $level"
+        )
+
+        txLastLogAtMs = now
+        txFrameCount = 0
+        txPayloadBytes = 0L
+    }
+
+    private fun pcmLevelSummary(pcmBytes: ByteArray): String {
+        if (pcmBytes.size < 2) return "rms=0 peak=0"
+
+        var i = 0
+        var samples = 0
+        var sumSquares = 0.0
+        var peak = 0
+
+        while (i + 1 < pcmBytes.size) {
+            val raw = (pcmBytes[i].toInt() and 0xff) or (pcmBytes[i + 1].toInt() shl 8)
+            val sample = raw.toShort().toInt()
+            val abs = kotlin.math.abs(sample)
+            if (abs > peak) peak = abs
+            sumSquares += sample.toDouble() * sample.toDouble()
+            samples += 1
+            i += 2
+        }
+
+        val rms = if (samples > 0) kotlin.math.sqrt(sumSquares / samples).toInt() else 0
+        return "rms=$rms peak=$peak"
     }
 
     private fun startPlaybackLoop() {
@@ -1203,6 +1465,70 @@ object WalkieTalkieManager {
         } catch (e: Exception) {
             Log.e(TAG, "play pcm failed", e)
         }
+    }
+
+    private fun logAudioRouteSnapshot(context: Context, label: String) {
+        try {
+            val audioManager =
+                context.applicationContext.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+
+            val outputDevices = audioManager
+                .getDevices(AudioManager.GET_DEVICES_OUTPUTS)
+                .joinToString(separator = ",") { deviceTypeName(it.type) }
+
+            val inputDevices = audioManager
+                .getDevices(AudioManager.GET_DEVICES_INPUTS)
+                .joinToString(separator = ",") { deviceTypeName(it.type) }
+
+            val communicationDevice = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                audioManager.communicationDevice?.let { deviceTypeName(it.type) } ?: "null"
+            } else {
+                "legacy"
+            }
+
+            @Suppress("DEPRECATION")
+            val legacyScoOn = audioManager.isBluetoothScoOn
+
+            Log.d(
+                AUDIO_DIAG_TAG,
+                "route label=$label mode=${audioManager.mode} speaker=${audioManager.isSpeakerphoneOn} " +
+                        "legacySco=$legacyScoOn btComm=${isBluetoothCommunicationActive(context)} " +
+                        "commDevice=$communicationDevice outputs=[$outputDevices] inputs=[$inputDevices]"
+            )
+        } catch (e: Exception) {
+            Log.e(AUDIO_DIAG_TAG, "route snapshot failed label=$label", e)
+        }
+    }
+
+    private fun deviceTypeName(type: Int): String {
+        return when (type) {
+            AudioDeviceInfo.TYPE_BUILTIN_EARPIECE -> "EARPIECE"
+            AudioDeviceInfo.TYPE_BUILTIN_SPEAKER -> "SPEAKER"
+            AudioDeviceInfo.TYPE_WIRED_HEADSET -> "WIRED_HEADSET"
+            AudioDeviceInfo.TYPE_WIRED_HEADPHONES -> "WIRED_HEADPHONES"
+            AudioDeviceInfo.TYPE_BLUETOOTH_SCO -> "BT_SCO"
+            AudioDeviceInfo.TYPE_BLUETOOTH_A2DP -> "BT_A2DP"
+            AudioDeviceInfo.TYPE_BUILTIN_MIC -> "BUILTIN_MIC"
+            AudioDeviceInfo.TYPE_USB_DEVICE -> "USB_DEVICE"
+            AudioDeviceInfo.TYPE_USB_HEADSET -> "USB_HEADSET"
+            AudioDeviceInfo.TYPE_BLE_HEADSET -> "BLE_HEADSET"
+            AudioDeviceInfo.TYPE_BLE_SPEAKER -> "BLE_SPEAKER"
+            else -> "TYPE_$type"
+        }
+    }
+
+    private fun ByteArray.headHex(maxBytes: Int): String {
+        return take(maxBytes).joinToString(separator = "") { byte ->
+            (byte.toInt() and 0xff).toString(16).padStart(2, '0')
+        }
+    }
+
+    private fun ByteArray.startsWithBytes(prefix: ByteArray): Boolean {
+        if (size < prefix.size) return false
+        for (i in prefix.indices) {
+            if (this[i] != prefix[i]) return false
+        }
+        return true
     }
 
     private fun parsePacket(
@@ -1365,8 +1691,8 @@ object WalkieTalkieManager {
             audioManager.mode = AudioManager.MODE_IN_COMMUNICATION
 
             if (!hasBluetoothConnectPermission(context)) {
-                audioManager.isSpeakerphoneOn = true
-                Log.d(TAG, "prepare route: BLUETOOTH_CONNECT missing. phone mic/speaker fallback")
+                audioManager.isSpeakerphoneOn = false
+                Log.d(TAG, "prepare route: BLUETOOTH_CONNECT missing. speaker fallback disabled, keep speakerphoneOff")
                 return false
             }
 
@@ -1408,10 +1734,10 @@ object WalkieTalkieManager {
             try {
                 audioManager.stopBluetoothSco()
                 audioManager.isBluetoothScoOn = false
-                audioManager.isSpeakerphoneOn = true
+                audioManager.isSpeakerphoneOn = false
             } catch (_: Exception) {
             }
-            Log.d(TAG, "legacy bluetooth SCO device not found. phone mic/speaker fallback")
+            Log.d(TAG, "legacy bluetooth SCO device not found. speaker fallback disabled, keep speakerphoneOff")
             return false
         }
 
@@ -1569,8 +1895,8 @@ object WalkieTalkieManager {
             audioManager.mode = AudioManager.MODE_IN_COMMUNICATION
 
             if (!hasBluetoothConnectPermission(context)) {
-                audioManager.isSpeakerphoneOn = true
-                Log.d(TAG, "BLUETOOTH_CONNECT permission missing. speaker output used")
+                audioManager.isSpeakerphoneOn = false
+                Log.d(TAG, "BLUETOOTH_CONNECT permission missing. speaker output fallback disabled")
                 return
             }
 
@@ -1591,8 +1917,8 @@ object WalkieTalkieManager {
                     )
                 } else {
                     audioManager.clearCommunicationDevice()
-                    audioManager.isSpeakerphoneOn = true
-                    Log.d(TAG, "no bluetooth communication device. speaker output used")
+                    audioManager.isSpeakerphoneOn = false
+                    Log.d(TAG, "no bluetooth communication device. speaker output fallback disabled")
                 }
             } else {
                 val hasBluetoothSco = hasLegacyBluetoothScoDevice(audioManager)
@@ -1605,8 +1931,8 @@ object WalkieTalkieManager {
                 } else {
                     audioManager.stopBluetoothSco()
                     audioManager.isBluetoothScoOn = false
-                    audioManager.isSpeakerphoneOn = true
-                    Log.d(TAG, "legacy bluetooth SCO not found. speaker output used")
+                    audioManager.isSpeakerphoneOn = false
+                    Log.d(TAG, "legacy bluetooth SCO not found. speaker output fallback disabled")
                 }
             }
         } catch (e: Exception) {

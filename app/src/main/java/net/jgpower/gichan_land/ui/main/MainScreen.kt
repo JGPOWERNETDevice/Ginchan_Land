@@ -581,10 +581,11 @@ fun MainScreen(
             }
         }
 
-        EmergencyPresenceBottomLine(
-            rescueStatus = emergencyPresence.rescueStatus,
-            policeStatus = emergencyPresence.policeStatus
-        )
+        // 메인 화면 하단 구조대/경찰 재실 여부 표시는 사용하지 않음.
+        // EmergencyPresenceBottomLine(
+        //     rescueStatus = emergencyPresence.rescueStatus,
+        //     policeStatus = emergencyPresence.policeStatus
+        // )
     }
 }
 

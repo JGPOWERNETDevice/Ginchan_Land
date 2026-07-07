@@ -133,6 +133,7 @@ class MainActivity : ComponentActivity() {
         window.decorView.alpha = 1.0f
 
 
+
         window.statusBarColor = Color.WHITE
         window.navigationBarColor = Color.WHITE
 
