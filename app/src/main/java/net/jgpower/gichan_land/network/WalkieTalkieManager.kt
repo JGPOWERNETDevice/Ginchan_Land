@@ -77,9 +77,9 @@ object WalkieTalkieManager {
     // Streamlit bridge packets are 8 kHz raw Opus with no redundancy.
     // Keep this path shallow for field voice calls. The bridge may still deliver frames
     // with jitter, but a deep app buffer makes Bluetooth playback delay much worse.
-    private const val STREAMLIT_JITTER_BUFFER_START_FRAMES = 3
-    private const val STREAMLIT_JITTER_BUFFER_MAX_FRAMES = 15
-    private const val STREAMLIT_PLAYBACK_MAX_PLC_FRAMES = 2
+    private const val STREAMLIT_JITTER_BUFFER_START_FRAMES = 6
+    private const val STREAMLIT_JITTER_BUFFER_MAX_FRAMES = 30
+    private const val STREAMLIT_PLAYBACK_MAX_PLC_FRAMES = 4
 
     private const val PLAYBACK_IDLE_SLEEP_MS = 1L
 
@@ -98,6 +98,10 @@ object WalkieTalkieManager {
     // Apply only before encoding 8 kHz raw Opus packets so Streamlit server code remains unchanged.
     private const val STREAMLIT_TX_GAIN = 2.4f
     private const val STREAMLIT_BT_TX_GAIN = 3.0f
+
+    // Xiaomi/YYK520 test mode: keep Bluetooth HFP/SCO active during a call so MIC ON/OFF
+    // does not repeatedly switch between SCO and A2DP. This trades A2DP quality for route stability.
+    private const val XIAOMI_SCO_FIXED_RECEIVE_MODE = true
 
     // bridge_server.py default monitor id. Packets to this worker must stay 8k raw Opus.
     private val STREAMLIT_WORKER_IDS = setOf("monitor", "streamlit", "bridge")
@@ -345,6 +349,17 @@ object WalkieTalkieManager {
     fun setTarget(target: WalkieTarget?) {
         currentTarget = target
         Log.d(TAG, "target=$target")
+
+        // Xiaomi/YYK520 SCO-fixed test: when a walkie target is selected or the call becomes active,
+        // enter the Bluetooth call route early and keep it there until the call target is cleared.
+        // This avoids SCO <-> A2DP switching while the user toggles the app mic.
+        appContext?.let { ctx ->
+            if (XIAOMI_SCO_FIXED_RECEIVE_MODE && target != null) {
+                keepScoForReceive(ctx, "setTarget-scoFixed")
+            } else if (target == null) {
+                restoreReceivePlaybackMode(ctx)
+            }
+        }
     }
 
     fun isTransmitRunning(): Boolean {
@@ -461,27 +476,80 @@ object WalkieTalkieManager {
 
 
     @Suppress("DEPRECATION")
+    private fun keepScoForReceive(context: Context, label: String) {
+        try {
+            val appCtx = context.applicationContext
+            val audioManager = appCtx.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+
+            suppressPlaybackUntilMs = 0L
+            audioManager.mode = AudioManager.MODE_IN_COMMUNICATION
+            audioManager.isSpeakerphoneOn = false
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                val bluetoothDevice = audioManager.availableCommunicationDevices.firstOrNull { device ->
+                    device.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO ||
+                            device.type == AudioDeviceInfo.TYPE_BLE_HEADSET
+                }
+
+                if (bluetoothDevice != null) {
+                    val result = audioManager.setCommunicationDevice(bluetoothDevice)
+                    Log.d(AUDIO_DIAG_TAG, "scoFixedReceive label=$label api=S result=$result deviceType=${bluetoothDevice.type} name=${bluetoothDevice.productName}")
+                } else {
+                    Log.d(AUDIO_DIAG_TAG, "scoFixedReceive label=$label api=S result=noBluetoothCommunicationDevice")
+                }
+            } else {
+                if (hasLegacyBluetoothScoDevice(audioManager)) {
+                    audioManager.startBluetoothSco()
+                    audioManager.isBluetoothScoOn = true
+                    Log.d(AUDIO_DIAG_TAG, "scoFixedReceive label=$label api=legacy startBluetoothSco=true")
+                } else {
+                    Log.d(AUDIO_DIAG_TAG, "scoFixedReceive label=$label api=legacy result=noBluetoothScoDevice")
+                }
+            }
+
+            Log.d(TAG, "SCO fixed receive mode enabled label=$label")
+            logAudioRouteSnapshot(appCtx, label)
+
+            audioRouteHandler.postDelayed({
+                logAudioRouteSnapshot(appCtx, "$label-500ms")
+            }, 500L)
+        } catch (e: Exception) {
+            Log.e(TAG, "keep SCO for receive failed label=$label", e)
+        }
+    }
+
+
+    @Suppress("DEPRECATION")
     private fun restoreReceivePlaybackMode(context: Context) {
         val appCtx = context.applicationContext
+
+        if (XIAOMI_SCO_FIXED_RECEIVE_MODE && currentTarget != null) {
+            keepScoForReceive(appCtx, "restoreReceivePlaybackMode-scoFixedInstead")
+            return
+        }
 
         // BT SCO route changes are asynchronous. After MIC OFF, Galaxy/YYK-520 can report
         // SCO audio state 0 while AudioManager still exposes BT_SCO as the communication device.
         // Clear the route now and retry after the platform has had time to settle. During that
-        // short window, avoid playing stale Streamlit frames into the narrow call route.
-        suppressPlaybackUntilMs = SystemClock.elapsedRealtime() + 900L
+        // longer quality-first window, avoid playing stale Streamlit frames into the narrow call route. Xiaomi/Android 10-11 can need more settling time than newer Galaxy devices.
+        suppressPlaybackUntilMs = SystemClock.elapsedRealtime() + 1500L
         clearPlaybackQueue("restoreReceivePlaybackMode")
         releasePlaybackTrack("restoreReceivePlaybackMode")
 
         forceScoOffForReceive(appCtx, "restoreReceivePlaybackMode-afterScoOff-0ms")
 
         audioRouteHandler.postDelayed({
-            forceScoOffForReceive(appCtx, "restoreReceivePlaybackMode-afterScoOff-300ms")
-        }, 300L)
+            forceScoOffForReceive(appCtx, "restoreReceivePlaybackMode-afterScoOff-500ms")
+        }, 500L)
 
         audioRouteHandler.postDelayed({
-            forceScoOffForReceive(appCtx, "restoreReceivePlaybackMode-afterScoOff-800ms")
+            forceScoOffForReceive(appCtx, "restoreReceivePlaybackMode-afterScoOff-1000ms")
+        }, 1000L)
+
+        audioRouteHandler.postDelayed({
+            forceScoOffForReceive(appCtx, "restoreReceivePlaybackMode-afterScoOff-1500ms")
             suppressPlaybackUntilMs = 0L
-        }, 800L)
+        }, 1500L)
     }
 
     @Suppress("DEPRECATION")
@@ -742,9 +810,15 @@ object WalkieTalkieManager {
 
                 audioRecord?.release()
 
-                // Release call/SCO route after TX so Streamlit -> app receive playback uses the
-                // normal media path instead of the narrow Bluetooth call path.
-                appContext?.let { restoreReceivePlaybackMode(it) }
+                // Xiaomi/YYK520 SCO-fixed test: keep the Bluetooth call route after TX stops.
+                // Only AudioRecord is stopped; SCO/A2DP switching is avoided while the call target remains active.
+                appContext?.let { ctx ->
+                    if (XIAOMI_SCO_FIXED_RECEIVE_MODE && currentTarget != null) {
+                        keepScoForReceive(ctx, "transmitStopped-scoFixed")
+                    } else {
+                        restoreReceivePlaybackMode(ctx)
+                    }
+                }
 
                 Log.d(TAG, "transmit stopped")
             }
@@ -1857,11 +1931,23 @@ object WalkieTalkieManager {
         audioDeviceCallback =
             object : AudioDeviceCallback() {
                 override fun onAudioDevicesAdded(addedDevices: Array<out AudioDeviceInfo>) {
-                    if (isTransmitting) routeCommunicationAudioDevice(context) else restoreReceivePlaybackMode(context)
+                    if (isTransmitting) {
+                        routeCommunicationAudioDevice(context)
+                    } else if (XIAOMI_SCO_FIXED_RECEIVE_MODE && currentTarget != null) {
+                        keepScoForReceive(context, "audioDeviceAdded-scoFixed")
+                    } else {
+                        restoreReceivePlaybackMode(context)
+                    }
                 }
 
                 override fun onAudioDevicesRemoved(removedDevices: Array<out AudioDeviceInfo>) {
-                    if (isTransmitting) routeCommunicationAudioDevice(context) else restoreReceivePlaybackMode(context)
+                    if (isTransmitting) {
+                        routeCommunicationAudioDevice(context)
+                    } else if (XIAOMI_SCO_FIXED_RECEIVE_MODE && currentTarget != null) {
+                        keepScoForReceive(context, "audioDeviceRemoved-scoFixed")
+                    } else {
+                        restoreReceivePlaybackMode(context)
+                    }
                 }
             }
 
